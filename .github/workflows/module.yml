@@ -90,12 +90,10 @@ jobs:
   package-helm-charts:
     needs: generate-matrix
     runs-on: ubuntu-22.04
-    # ✅ Run only if PR is merged AND matrix is not empty
-    if: github.event.pull_request.merged == true && needs.generate-matrix.outputs.matrix != '{"include":[]}'
+    if: needs.generate-matrix.outputs.matrix != '{"include":[]}'
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -148,26 +146,18 @@ jobs:
         run: |
           set -e
           TAG="${{ steps.get_version.outputs.version }}"
-
-          echo "Preparing to create tag: $TAG"
+          echo "Tag value: $TAG"
           git fetch --tags
           git log -1 --oneline
-
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
-
-          # Delete tag if it exists
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "Tag $TAG already exists. Deleting it."
             git tag -d "$TAG"
             git push origin ":refs/tags/$TAG"
           fi
-
-          echo "Creating tag $TAG at commit:"
-          git rev-parse HEAD
-
           git tag -a "$TAG" -m "Release $TAG"
           git push origin "$TAG"
-
-          echo "✅ Tag $TAG pushed successfully!"
+          echo "Tag $TAG push attempted. Verifying..."
+          git ls-remote --tags origin | grep $TAG || echo "Tag not found on remote"
