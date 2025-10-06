@@ -237,7 +237,7 @@ jobs:
           helm package . --destination ../packages
           # Merge into existing index.yaml if exists
           if [ -f ../packages/index.yaml ]; then
-            helm repo index ../packages --merge ../packages/index.yaml .
+            helm repo index ../packages --merge ../packages/index.yaml
           else
             helm repo index ../packages .
           fi
@@ -286,7 +286,7 @@ jobs:
           helm package . --version "$version" --destination ../packages
           # Merge only new chart into index.yaml
           if [ -f ../packages/index.yaml ]; then
-            helm repo index ../packages --merge ../packages/index.yaml .
+            helm repo index ../packages --merge ../packages/index.yaml
           else
             helm repo index ../packages .
           fi
