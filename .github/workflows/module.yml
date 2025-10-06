@@ -255,7 +255,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    if: github.event_name == 'pull_request_target' && needs.detect.outputs.is-merge-event == 'true'    
+    if: github.event_name == 'pull_request_target' && needs.detect.outputs.is-merge-event == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -269,10 +269,16 @@ jobs:
 
       - name: Package Helm Chart (Publish)
         run: |
-          echo " Helm chart for module: ${{ matrix.module_name }}"
-          cd ${{ matrix.module_path }}
-          helm package . --destination ../packages
-          helm repo index ../packages --merge ../packages/index.yaml
+          echo "📦 Packaging Helm chart for module: ${{ matrix.module_name }}"
+          
+          if [ ! -f "${{ matrix.module_path }}/Chart.yaml" ]; then
+            echo "❌ Skipping: Chart.yaml not found in ${{ matrix.module_path }}"
+            exit 0
+          fi
+          
+          mkdir -p packages
+          helm package "${{ matrix.module_path }}" --destination packages
+          helm repo index packages --merge packages/index.yaml || helm repo index packages
 
       - name: Commit and push updated Helm packages
         env:
@@ -284,8 +290,8 @@ jobs:
 
           if [[ -n "$(git status --porcelain)" ]]; then
             git add .
-            git commit -m " update Helm chart package for ${{ matrix.module_name }}"
+            git commit -m "ci: update Helm chart package for ${{ matrix.module_name }}"
             git push
           else
-            echo "No changes to commit in packages/"
+            echo "✅ No changes to commit in packages/"
           fi
