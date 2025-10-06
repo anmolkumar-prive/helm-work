@@ -1,13 +1,9 @@
 name: Release Helm chart
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
 
 on:
   pull_request:
     branches:
       - main
-    types: [opened, synchronize, reopened, labeled, unlabeled]
   pull_request_target:
     types: [closed]
 
@@ -20,35 +16,6 @@ env:
   HELM_VERSION: 3.10.0
 
 jobs:
-  detect:
-    runs-on: ubuntu-22.04
-    name: 'Check labels'
-    outputs:
-      release-type: ${{ steps.release.outputs.type }}
-      is-merge-event: >-
-        ${{ github.event_name == 'pull_request_target'
-         && github.event.action == 'closed'
-         && github.event.pull_request.merged == true }}
-    steps:
-      - name: Get all labels in PR
-        id: pr-labels
-        uses: joerick/pr-labels-action@0543b277721e852d821c6738d449f2f4dea03d5f # v1.0.9
-
-      - name: Set Release type
-        id: release
-        run: |
-          if [ -n "$GITHUB_PR_LABEL_MAJOR" ]; then
-            echo "type=major" >> $GITHUB_OUTPUT
-          elif [ -n "$GITHUB_PR_LABEL_MINOR" ]; then
-            echo "type=minor" >> $GITHUB_OUTPUT
-          elif [ -n "$GITHUB_PR_LABEL_PATCH" ]; then
-            echo "type=patch" >> $GITHUB_OUTPUT
-          elif [ -n "$GITHUB_PR_LABEL_NO_RELEASE" ]; then
-            echo "type=no-release" >> $GITHUB_OUTPUT
-          else
-            echo "::error ::No release type labels found(patch/minor/major/no-release))"
-            exit 2
-          fi
 
   generate-matrix:
     name: Generate matrix
@@ -57,161 +24,35 @@ jobs:
       matrix: ${{ steps.changed-directories.outputs.matrix }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Get list of changed directories with Chart.yaml
+      - name: Get changed Helm chart directories
         id: changed-directories
         run: |
-          list_changed_files=$(git diff --diff-filter=d --name-only HEAD^ HEAD ':(exclude)*README.md' ':(exclude)*/templates/*' ':(exclude)*/user-data/*' ':(exclude)*/policies/*')
+          list_changed_files=$(git diff --name-only origin/main...HEAD)
           declare -a matrix
-          list_changed_directories=$(echo "$list_changed_files" | xargs -L1 dirname | sort -u | grep -Ev "^\." | grep -v "^packages/")
-          for dir in $list_changed_directories; do
+          for file in $list_changed_files; do
+            dir=$(dirname "$file")
             if [ -f "$dir/Chart.yaml" ]; then
-              module_name=$(echo "$dir" | sed -e "s/\//_/g")
+              module_name=$(echo "$dir" | sed 's/\//_/g')
               matrix+="{\"module_name\": \"$module_name\", \"module_path\": \"$dir\"},"
             fi
           done
           if [ -z "$matrix" ]; then
-            echo "No valid Helm chart directories found with Chart.yaml"
             echo "matrix={\"include\":[]}" >> $GITHUB_OUTPUT
           else
             echo "matrix={\"include\":[${matrix%,}]}" >> $GITHUB_OUTPUT
           fi
-          echo "Matrix: ${matrix%,}"
-
-  setup:
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Set up Helm
-        uses: azure/setup-helm@fe7b79cd5ee1e45176fcad797de68ecaf3ca4814  # v4.2.0
-        with:
-          version: ${{ env.HELM_VERSION }}
-
-  decide-tags:
-    needs:
-      - generate-matrix
-      - detect
-    name: Decide Tags
-    runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    if: needs.detect.outputs.release-type != 'no-release'
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 #v4.2.2
-        with:
-          fetch-depth: 0
-
-      - name: 'Get Previous version'
-        id: previoustag
-        uses: "WyriHaximus/github-action-get-previous-tag@04e8485ecb6487243907e330d522ff60f02283ce" # v1.4.0
-        with:
-          fallback: ${{ env.DEFAULT_MODULE_VERSION }}
-          prefix: ${{ matrix.module_name }}
-
-      - name: 'Remove prefix from tag'
-        id: previoustag-withoutprefix
-        run: |
-          withoutTag=$(echo ${{ steps.previoustag.outputs.tag }} | sed -e "s/^${{ matrix.module_name }}-//")
-          echo "tag=$withoutTag" >> $GITHUB_OUTPUT
-
-      - name: 'Generate next version'
-        id: next-semver
-        uses: "WyriHaximus/github-action-next-semvers@18aa9ed4152808ab99b88d71f5481e41f8d89930" # v1.2.1
-        with:
-          version: ${{ steps.previoustag-withoutprefix.outputs.tag }}
-
-      - uses: "cloudposse/github-action-matrix-outputs-write@ed06cf3a6bf23b8dce36d1cf0d63123885bb8375" # v1.0.0
-        id: out
-        with:
-          matrix-step-name: ${{ github.job }}
-          matrix-key: ${{ matrix.module_name }}
-          outputs: |-
-              previous_tag: ${{ steps.previoustag-withoutprefix.outputs.tag }}
-              new_tag: ${{ steps.next-semver.outputs[format('v_{0}', needs.detect.outputs.release-type )] }} 
-
-  comment:
-    needs:
-      - decide-tags
-      - generate-matrix
-    runs-on: ubuntu-22.04
-    name: 'Comment on PR'
-    if: needs.detect.outputs.is-merge-event == 'false'
-    steps:
-      - uses: "cloudposse/github-action-matrix-outputs-read@33cac12fa9282a7230a418d859b93fdbc4f27b5a" # v1.0.0
-        id: read
-        with:
-          matrix-step-name: decide-tags
-
-      - name: 'Prepare PR comments'
-        id: comment_on_pr
-        run: |
-          list_of_modules=$(echo '${{ steps.read.outputs.result }}' | jq '.new_tag | keys[]' )
-          previous_tags=$(echo '${{ steps.read.outputs.result }}' | jq '.previous_tag' )
-          new_tags=$(echo '${{ steps.read.outputs.result }}' | jq '.new_tag')
-          
-          echo "# Release plan" >> prepare_comment.txt
-          echo "| Module | Previous version | New version |" >> prepare_comment.txt
-          echo "|--|--|--|" >> prepare_comment.txt
-          
-          declare -a array
-          for module in $list_of_modules;
-          do
-            echo "| $module | $(echo $previous_tags | jq -r '.'$module) | $(echo $new_tags | jq -r '.'$module) |" >> prepare_comment.txt
-          done          
-
-      - name: Comment PR
-        uses: "thollander/actions-comment-pull-request@24bffb9b452ba05a4f3f77933840a6a841d1b32b" # v3.0.0
-        with:
-          file-path: prepare_comment.txt
-
-  create-tag:
-    needs:
-      - generate-matrix
-      - decide-tags
-    name: Tag
-    runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    if: ${{ (fromJson(needs.generate-matrix.outputs.matrix).include[0]) && (needs.detect.outputs.is-merge-event == 'true') }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 #v4.2.2
-        with:
-          fetch-depth: 0
-
-      - uses: "cloudposse/github-action-matrix-outputs-read@33cac12fa9282a7230a418d859b93fdbc4f27b5a" # v1.0.0
-        id: read
-        with:
-          matrix-step-name: decide-tags
-
-      - name: Fetch current SHA
-        id: moduleSha
-        run: |
-          pwd
-          module_sha=$(git log -1 --format="%H" -- ${{ matrix.module_path }})
-          echo "sha=$module_sha" >> $GITHUB_OUTPUT
-
-      - name: Create Tag
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ matrix.module_name }}-${{ fromJson(steps.read.outputs.result).new_tag[format('{0}', matrix.module_name )] }}" -m "Version ${{ fromJson(steps.read.outputs.result).new_tag[format('{0}', matrix.module_name )] }}" "${{ steps.moduleSha.outputs.sha }}"
-          git push origin ${{ matrix.module_name }}-${{ fromJson(steps.read.outputs.result).new_tag[format('{0}', matrix.module_name )] }}
 
   preview-helm-charts:
-    needs:
-      - generate-matrix
+    needs: [generate-matrix]
     runs-on: ubuntu-22.04
+    if: github.event_name == 'pull_request'
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    if: github.event_name == 'pull_request'
-    name: "Preview Helm Chart Packaging"
+    name: Preview Helm Chart Packaging
     steps:
       - name: Checkout PR branch
         uses: actions/checkout@v4
@@ -226,16 +67,12 @@ jobs:
 
       - name: Preview Helm Chart packaging
         run: |
-          echo "Generating preview Helm package for module: ${{ matrix.module_name }}"
           cd ${{ matrix.module_path }}
           helm package .
-
-          # Only merge this chart entry into index.yaml
           helm repo index --merge ../packages/index.yaml .
+          mv ./*.tgz index.yaml ../packages/
 
-          mv ./${{ matrix.module_name }}-*.tgz index.yaml ../packages/
-
-      - name: Commit and push preview package changes to PR branch
+      - name: Commit preview chart
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -244,24 +81,18 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if [[ -n "$(git status --porcelain)" ]]; then
             git add .
-            git commit -m "preview: update Helm chart for ${{ matrix.module_name }}"
+            git commit -m "Preview Helm chart for ${{ matrix.module_name }}"
             git push origin HEAD:${{ github.head_ref }}
           else
-            echo "No chart preview changes to commit"
+            echo "No changes"
           fi
 
-
   package-helm-charts:
-    needs:
-      - create-tag
-      - generate-matrix
-      - decide-tags
+    needs: generate-matrix
     runs-on: ubuntu-22.04
+    if: github.event.pull_request.merged == true
     strategy:
-      fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    if: github.event_name == 'pull_request_target' && needs.detect.outputs.is-merge-event == 'true'
-    name: "Package Helm Charts"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -273,41 +104,45 @@ jobs:
         with:
           version: ${{ env.HELM_VERSION }}
 
-      - uses: "cloudposse/github-action-matrix-outputs-read@33cac12fa9282a7230a418d859b93fdbc4f27b5a" # v1.0.0
-        id: read
-        with:
-          matrix-step-name: decide-tags
+      - name: Get version from Chart.yaml
+        id: get_version
+        run: |
+          version=$(grep '^version:' ${{ matrix.module_path }}/Chart.yaml | head -1 | sed 's/version:[[:space:]]*//')
+          echo "version=$version" >> $GITHUB_OUTPUT
 
-      - name: Package Helm Chart and Update index.yaml
+      - name: Create git tag from Chart version
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          tag="${{ matrix.module_name }}-${{ steps.get_version.outputs.version }}"
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            echo "Tag $tag already exists, skipping."
+          else
+            git tag -a "$tag" -m "Release $tag"
+            git push origin "$tag"
+          fi
 
-          version="${{ fromJson(steps.read.outputs.result).new_tag[format('{0}', matrix.module_name )] }}"
-          version="${version#v}"  # Remove leading 'v' if present
-
-          echo "Packaging Helm chart for ${{ matrix.module_name }} at version $version"
+      - name: Package Helm chart
+        run: |
           cd ${{ matrix.module_path }}
-
-          helm package . --version "$version"
-
-          # Only merge this chart into index.yaml
+          helm package . --version ${{ steps.get_version.outputs.version }}
           helm repo index --merge ../packages/index.yaml .
+          mv ./*.tgz index.yaml ../packages/
 
-          mv ./${{ matrix.module_name }}-$version.tgz index.yaml ../packages/
-
-      - name: Commit and push updated Helm packages
+      - name: Commit and push packaged charts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd packages
-
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           if [[ -n "$(git status --porcelain)" ]]; then
             git add .
-            git commit -m "${{ matrix.module_name }}: update package and index.yaml"
+            git commit -m "Release ${{ matrix.module_name }} version ${{ steps.get_version.outputs.version }}"
             git push
           else
-            echo "No changes to commit in packages/"
+            echo "No changes to commit"
           fi
+          
