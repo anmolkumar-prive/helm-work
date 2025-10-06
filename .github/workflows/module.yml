@@ -99,7 +99,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          fetch-tags: true  # ✅ Make sure we have tags locally
+          fetch-tags: true
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
@@ -140,24 +140,45 @@ jobs:
             echo "No changes detected in packages/, skipping commit."
           fi
 
-      - name: Create and push Git tag for Helm release
+  tag-helm-charts:
+    name: Create Git Tag for Helm Chart
+    needs: [package-helm-charts]
+    runs-on: ubuntu-22.04
+    if: github.event.pull_request.merged == true
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          ref: main
+
+      - name: Extract version from Chart.yaml
+        id: get_version
+        run: |
+          version=$(grep '^version:' "${{ matrix.module_path }}/Chart.yaml" | head -1 | sed 's/version:[[:space:]]*//')
+          if [ -z "$version" ]; then
+            echo "ERROR: Version not found in Chart.yaml"
+            exit 1
+          fi
+          echo "version=$version" >> $GITHUB_OUTPUT
+
+      - name: Create and push Git tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
-          git fetch --tags
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
-
-          TAG="${{ steps.get_version.outputs.version }}"
-
-          # Always create or update the tag to ensure the latest version is reflected
+          
+          TAG="${{ matrix.module_name }}-${{ steps.get_version.outputs.version }}"
+          
           if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists. Updating it to latest commit."
-            git tag -d "$TAG"
-            git push origin ":refs/tags/$TAG"
+            echo "Tag $TAG already exists. Skipping."
+          else
+            git tag -a "$TAG" -m "Release $TAG"
+            git push origin "$TAG"
           fi
-
-          git tag -a "$TAG" -m "Release $TAG"
-          git push origin "$TAG"
