@@ -229,19 +229,17 @@ jobs:
         with:
           version: ${{ env.HELM_VERSION }}
 
-      - name: Preview Helm Chart
+      - name: Package Helm Chart for preview
         run: |
-          echo "📦 Packaging Helm chart for preview: ${{ matrix.module_name }}"
+          echo "📦 Generating preview Helm package for module: ${{ matrix.module_name }}"
           cd ${{ matrix.module_path }}
-
           # Package chart
           helm package . --destination ../packages
-
-          # Merge index safely, only new versions get new timestamps
+          # Merge into existing index.yaml if exists
           if [ -f ../packages/index.yaml ]; then
-            helm repo index ../packages --merge ../packages/index.yaml
+            helm repo index ../packages --merge ../packages/index.yaml .
           else
-            helm repo index ../packages
+            helm repo index ../packages .
           fi
 
       - name: Commit and push preview changes
@@ -250,7 +248,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add packages/
+          git add ../packages
           if [[ -n "$(git status --porcelain)" ]]; then
             git commit -m "ci(preview): update Helm chart preview for ${{ matrix.module_name }}"
             git push origin HEAD:${{ github.head_ref }}
@@ -267,7 +265,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    if: github.event_name == 'pull_request_target' && needs.detect.outputs.is-merge-event == 'true'    
+    if: github.event_name == 'pull_request_target' && needs.detect.outputs.is-merge-event == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -279,19 +277,18 @@ jobs:
         with:
           version: ${{ env.HELM_VERSION }}
 
-      - name: Package Helm Chart (Publish)
+      - name: Package Helm Chart for release
         run: |
-          echo "📦 Packaging Helm chart: ${{ matrix.module_name }}"
+          echo "📦 Packaging Helm chart for module: ${{ matrix.module_name }}"
           cd ${{ matrix.module_path }}
-
-          # Package chart
-          helm package . --destination ../packages
-
-          # Merge index safely
+          version="${{ fromJson(needs.decide-tags.outputs.result).new_tag[format('{0}', matrix.module_name )] }}"
+          version="${version#v}"
+          helm package . --version "$version" --destination ../packages
+          # Merge only new chart into index.yaml
           if [ -f ../packages/index.yaml ]; then
-            helm repo index ../packages --merge ../packages/index.yaml
+            helm repo index ../packages --merge ../packages/index.yaml .
           else
-            helm repo index ../packages
+            helm repo index ../packages .
           fi
 
       - name: Commit and push updated Helm packages
@@ -302,7 +299,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add ../packages
           if [[ -n "$(git status --porcelain)" ]]; then
-            git commit -m "ci: update Helm chart package for ${{ matrix.module_name }}"
+            git commit -m "ci(release): update Helm chart package for ${{ matrix.module_name }}"
             git push
           else
             echo "✅ No changes to commit in packages/"
