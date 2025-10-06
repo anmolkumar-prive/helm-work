@@ -3,6 +3,16 @@ entries:
   myapp:
   - apiVersion: v2
     appVersion: 1.16.0
+    created: "2025-10-06T11:45:55.81107384Z"
+    description: A Helm chart for Kubernetes
+    digest: e4147fefaf44ea191bb75ad8e3abbcd5d0da836225709283cbdc69ce59ced7e9
+    name: myapp
+    type: application
+    urls:
+    - myapp-0.9.5.tgz
+    version: 0.9.5
+  - apiVersion: v2
+    appVersion: 1.16.0
     created: "2025-10-06T11:35:12.20494886Z"
     description: A Helm chart for Kubernetes
     digest: 45b0ce328a4572da933614a5da2ba4323935e2da3451f041d6904ea3f8cc52c2
@@ -81,4 +91,4 @@ entries:
     urls:
     - myapp-0.2.0.tgz
     version: 0.2.0
-generated: "2025-10-06T11:35:12.201478497Z"
+generated: "2025-10-06T11:45:55.810542497Z"
