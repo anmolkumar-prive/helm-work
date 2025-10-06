@@ -16,7 +16,6 @@ env:
   HELM_VERSION: 3.10.0
 
 jobs:
-
   generate-matrix:
     name: Generate matrix
     runs-on: ubuntu-22.04
@@ -52,7 +51,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    name: Preview Helm Chart Packaging
+    name: Preview Helm Chart Packaging and Push
     steps:
       - name: Checkout PR branch
         uses: actions/checkout@v4
@@ -72,7 +71,7 @@ jobs:
           helm repo index --merge ../packages/index.yaml .
           mv ./*.tgz index.yaml ../packages/
 
-      - name: Commit preview chart
+      - name: Commit and push preview chart
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -87,24 +86,20 @@ jobs:
             echo "No changes"
           fi
 
-  package-helm-charts:
-    needs: generate-matrix
+  create-tags:
+    needs: [generate-matrix]
     runs-on: ubuntu-22.04
     if: github.event.pull_request.merged == true && needs.generate-matrix.outputs.matrix != '{"include":[]}'
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     steps:
-      - name: Checkout code
+      - name: Checkout main branch
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           fetch-tags: true
-
-      - name: Set up Helm
-        uses: azure/setup-helm@v4
-        with:
-          version: ${{ env.HELM_VERSION }}
+          ref: main
 
       - name: Extract version from Chart.yaml
         id: get_version
@@ -116,70 +111,21 @@ jobs:
           fi
           echo "version=$version" >> $GITHUB_OUTPUT
 
-      - name: Package Helm chart and update index
-        run: |
-          cd "${{ matrix.module_path }}"
-          helm package . --version "${{ steps.get_version.outputs.version }}"
-          helm repo index --merge ../packages/index.yaml .
-          mv ./*.tgz index.yaml ../packages/
-
-      - name: Commit and push packaged charts
+      - name: Create and push Git tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cd packages
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
-
-          if [[ -n "$(git status --porcelain)" ]]; then
-            git add .
-            git commit -m "Release ${{ matrix.module_name }} version ${{ steps.get_version.outputs.version }}"
-            git push
+          
+          TAG="${{ matrix.module_name }}-${{ steps.get_version.outputs.version }}"
+          
+          echo "Attempting to create tag: $TAG"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists. Skipping."
           else
-            echo "No changes detected in packages/, skipping commit."
+            git tag -a "$TAG" -m "Release $TAG"
+            git push origin "$TAG"
+            echo "Tag $TAG created and pushed successfully."
           fi
-
-  tag-helm-charts:
-    needs: package-helm-charts
-    runs-on: ubuntu-22.04
-    if: github.event.pull_request.merged == true && needs.generate-matrix.outputs.matrix != '{"include":[]}'
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    steps:
-    - name: Checkout main branch
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        fetch-tags: true
-        ref: main
-
-    - name: Extract version from Chart.yaml
-      id: get_version
-      run: |
-        version=$(grep '^version:' "${{ matrix.module_path }}/Chart.yaml" | head -1 | sed 's/version:[[:space:]]*//')
-        if [ -z "$version" ]; then
-          echo "ERROR: Version not found in Chart.yaml"
-          exit 1
-        fi
-        echo "version=$version" >> $GITHUB_OUTPUT
-
-    - name: Create and push Git tag
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
-        
-        TAG="${{ matrix.module_name }}-${{ steps.get_version.outputs.version }}"
-        
-        echo "Attempting to create tag: $TAG"
-        if git rev-parse "$TAG" >/dev/null 2>&1; then
-          echo "Tag $TAG already exists. Skipping."
-        else
-          git tag -a "$TAG" -m "Release $TAG"
-          git push origin "$TAG"
-          echo "Tag $TAG created and pushed successfully."
-        fi
