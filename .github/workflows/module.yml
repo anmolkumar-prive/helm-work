@@ -92,6 +92,7 @@ jobs:
     runs-on: ubuntu-22.04
     if: github.event.pull_request.merged == true
     strategy:
+      fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     steps:
       - name: Checkout code
@@ -104,30 +105,36 @@ jobs:
         with:
           version: ${{ env.HELM_VERSION }}
 
-      - name: Get version from Chart.yaml
+      - name: Extract version from Chart.yaml
         id: get_version
         run: |
-          version=$(grep '^version:' ${{ matrix.module_path }}/Chart.yaml | head -1 | sed 's/version:[[:space:]]*//')
+          version=$(grep '^version:' "${{ matrix.module_path }}/Chart.yaml" | head -1 | sed 's/version:[[:space:]]*//')
+          if [ -z "$version" ]; then
+            echo "ERROR: Version not found in Chart.yaml"
+            exit 1
+          fi
           echo "version=$version" >> $GITHUB_OUTPUT
 
-      - name: Create git tag from Chart version
+      - name: Create git tag from Helm chart version
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          tag="${{ matrix.module_name }}-${{ steps.get_version.outputs.version }}"
-          if git rev-parse "$tag" >/dev/null 2>&1; then
-            echo "Tag $tag already exists, skipping."
+
+          TAG="${{ matrix.module_name }}-${{ steps.get_version.outputs.version }}"
+
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists. Skipping tag creation."
           else
-            git tag -a "$tag" -m "Release $tag"
-            git push origin "$tag"
+            git tag -a "$TAG" -m "Release $TAG"
+            git push origin "$TAG"
           fi
 
-      - name: Package Helm chart
+      - name: Package Helm chart and update index
         run: |
-          cd ${{ matrix.module_path }}
-          helm package . --version ${{ steps.get_version.outputs.version }}
+          cd "${{ matrix.module_path }}"
+          helm package . --version "${{ steps.get_version.outputs.version }}"
           helm repo index --merge ../packages/index.yaml .
           mv ./*.tgz index.yaml ../packages/
 
@@ -138,11 +145,11 @@ jobs:
           cd packages
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
           if [[ -n "$(git status --porcelain)" ]]; then
             git add .
             git commit -m "Release ${{ matrix.module_name }} version ${{ steps.get_version.outputs.version }}"
             git push
           else
-            echo "No changes to commit"
+            echo "No changes detected in packages/, skipping commit."
           fi
-          
