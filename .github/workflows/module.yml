@@ -90,16 +90,18 @@ jobs:
   package-helm-charts:
     needs: generate-matrix
     runs-on: ubuntu-22.04
-    if: github.event.pull_request.merged == true
+    # ✅ Run only if PR is merged AND matrix is not empty
+    if: github.event.pull_request.merged == true && needs.generate-matrix.outputs.matrix != '{"include":[]}'
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          fetch-tags: true  # ✅ Make sure we have tags locally
+          fetch-tags: true
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
@@ -140,7 +142,7 @@ jobs:
             echo "No changes detected in packages/, skipping commit."
           fi
 
-      - name: Create and push Git tag for Helm release
+      - name: Create and push Git tag matching chart version
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -152,7 +154,7 @@ jobs:
 
           TAG="${{ steps.get_version.outputs.version }}"
 
-          # Always create or update the tag to ensure the latest version is reflected
+          # If tag already exists, delete it to re-create
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "Tag $TAG already exists. Updating it to latest commit."
             git tag -d "$TAG"
