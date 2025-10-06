@@ -90,12 +90,10 @@ jobs:
   package-helm-charts:
     needs: generate-matrix
     runs-on: ubuntu-22.04
-    # ✅ Run only if PR is merged AND matrix is not empty
-    if: github.event.pull_request.merged == true && needs.generate-matrix.outputs.matrix != '{"include":[]}'
+    if: github.event.pull_request.merged == true
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -142,32 +140,45 @@ jobs:
             echo "No changes detected in packages/, skipping commit."
           fi
 
-      - name: Create and push Git tag matching chart version
+  tag-helm-charts:
+    name: Create Git Tag for Helm Chart
+    needs: [package-helm-charts]
+    runs-on: ubuntu-22.04
+    if: github.event.pull_request.merged == true
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          ref: main
+
+      - name: Extract version from Chart.yaml
+        id: get_version
+        run: |
+          version=$(grep '^version:' "${{ matrix.module_path }}/Chart.yaml" | head -1 | sed 's/version:[[:space:]]*//')
+          if [ -z "$version" ]; then
+            echo "ERROR: Version not found in Chart.yaml"
+            exit 1
+          fi
+          echo "version=$version" >> $GITHUB_OUTPUT
+
+      - name: Create and push Git tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
-          TAG="${{ steps.get_version.outputs.version }}"
-
-          echo "Preparing to create tag: $TAG"
-          git fetch --tags
-          git log -1 --oneline
-
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
-
-          # Delete tag if it exists
+          
+          TAG="${{ matrix.module_name }}-${{ steps.get_version.outputs.version }}"
+          
           if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists. Deleting it."
-            git tag -d "$TAG"
-            git push origin ":refs/tags/$TAG"
+            echo "Tag $TAG already exists. Skipping."
+          else
+            git tag -a "$TAG" -m "Release $TAG"
+            git push origin "$TAG"
           fi
-
-          echo "Creating tag $TAG at commit:"
-          git rev-parse HEAD
-
-          git tag -a "$TAG" -m "Release $TAG"
-          git push origin "$TAG"
-
-          echo "✅ Tag $TAG pushed successfully!"
