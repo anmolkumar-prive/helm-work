@@ -57,23 +57,28 @@ jobs:
       matrix: ${{ steps.changed-directories.outputs.matrix }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 #v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
-      - name: Get list of changed directories
+      - name: Get list of changed directories with Chart.yaml
         id: changed-directories
         run: |
-          list_changed_directories=$(git diff --diff-filter=d --name-only HEAD^ HEAD ':(exclude)*README.md' | xargs -L1 dirname | uniq | grep -Ev "^\." | sed -e 's/\/templates//;s/\/user-data//;s/\/policies//' | uniq || [[ $? == 1 ]] )
-          echo $list_changed_directories
-
+          list_changed_files=$(git diff --diff-filter=d --name-only HEAD^ HEAD ':(exclude)*README.md' ':(exclude)*/templates/*' ':(exclude)*/user-data/*' ':(exclude)*/policies/*')
           declare -a matrix
-          for changed_directory in $list_changed_directories;
-          do
-            module_name=$(echo $changed_directory | sed -e "s/\//_/g")
-            matrix+="{\"module_name\": \"$module_name\", \"module_path\": \"$changed_directory\"},"
+          list_changed_directories=$(echo "$list_changed_files" | xargs -L1 dirname | sort -u | grep -Ev "^\." | grep -v "^packages/")
+          for dir in $list_changed_directories; do
+            if [ -f "$dir/Chart.yaml" ]; then
+              module_name=$(echo "$dir" | sed -e "s/\//_/g")
+              matrix+="{\"module_name\": \"$module_name\", \"module_path\": \"$dir\"},"
+            fi
           done
-          echo "matrix={\"include\":[$matrix]}" >> $GITHUB_OUTPUT
-          echo $matrix
+          if [ -z "$matrix" ]; then
+            echo "No valid Helm chart directories found with Chart.yaml"
+            echo "matrix={\"include\":[]}" >> $GITHUB_OUTPUT
+          else
+            echo "matrix={\"include\":[${matrix%,}]}" >> $GITHUB_OUTPUT
+          fi
+          echo "Matrix: ${matrix%,}"
 
   setup:
     runs-on: ubuntu-22.04
