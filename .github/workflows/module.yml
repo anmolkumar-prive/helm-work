@@ -43,7 +43,6 @@ jobs:
           else
             echo "matrix={\"include\":[${matrix%,}]}" >> $GITHUB_OUTPUT
           fi
-
   preview-helm-charts:
       needs: [generate-matrix]
       runs-on: ubuntu-22.04
