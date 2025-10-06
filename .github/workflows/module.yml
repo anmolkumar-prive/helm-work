@@ -211,6 +211,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     if: github.event_name == 'pull_request'
+    name: "Preview Helm Chart Packaging"
     steps:
       - name: Checkout PR branch
         uses: actions/checkout@v4
@@ -227,22 +228,28 @@ jobs:
         run: |
           echo "Generating preview Helm package for module: ${{ matrix.module_name }}"
           cd ${{ matrix.module_path }}
-          helm package . --destination ../packages
-          helm repo index ../packages --merge ../packages/index.yaml || helm repo index ../packages
+          helm package .
+
+          # Only merge this chart entry into index.yaml
+          helm repo index --merge ../packages/index.yaml .
+
+          mv ./${{ matrix.module_name }}-*.tgz index.yaml ../packages/
 
       - name: Commit and push preview package changes to PR branch
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          cd packages
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add packages/
           if [[ -n "$(git status --porcelain)" ]]; then
-            git commit -m "update Helm chart preview for ${{ matrix.module_name }}"
+            git add .
+            git commit -m "preview: update Helm chart for ${{ matrix.module_name }}"
             git push origin HEAD:${{ github.head_ref }}
           else
-            echo "No chart changes to preview"
+            echo "No chart preview changes to commit"
           fi
+
 
   package-helm-charts:
     needs:
@@ -254,6 +261,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     if: github.event_name == 'pull_request_target' && needs.detect.outputs.is-merge-event == 'true'
+    name: "Package Helm Charts"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -265,51 +273,40 @@ jobs:
         with:
           version: ${{ env.HELM_VERSION }}
 
-      - name: Install yq
-        run: |
-          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
+      - uses: "cloudposse/github-action-matrix-outputs-read@33cac12fa9282a7230a418d859b93fdbc4f27b5a" # v1.0.0
+        id: read
+        with:
+          matrix-step-name: decide-tags
 
       - name: Package Helm Chart and Update index.yaml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Package the Helm chart
-          echo "Packaging Helm chart for module: ${{ matrix.module_name }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          version="${{ fromJson(steps.read.outputs.result).new_tag[format('{0}', matrix.module_name )] }}"
+          version="${version#v}"  # Remove leading 'v' if present
+
+          echo "Packaging Helm chart for ${{ matrix.module_name }} at version $version"
           cd ${{ matrix.module_path }}
-          helm package . --destination ../packages
 
-          # Get the new chart version from Chart.yaml
-          new_version=$(yq eval '.version' Chart.yaml)
-          chart_name=$(yq eval '.name' Chart.yaml)
+          helm package . --version "$version"
 
-          # Check if index.yaml exists, if not create an empty one
-          if [ ! -f ../packages/index.yaml ]; then
-            echo "Creating new index.yaml"
-            helm repo index ../packages
-          fi
+          # Only merge this chart into index.yaml
+          helm repo index --merge ../packages/index.yaml .
 
-          # Backup existing index.yaml
-          cp ../packages/index.yaml ../packages/index.yaml.bak || touch ../packages/index.yaml.bak
-
-          # Generate new index.yaml for the current chart
-          helm repo index ../packages --merge ../packages/index.yaml.bak
-
-          # Update timestamp only for the new version
-          echo "Updating timestamp for ${chart_name}-${new_version}"
-          current_timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          yq eval -i ".entries.\"${chart_name}\"[0].created = \"${current_timestamp}\"" ../packages/index.yaml
+          mv ./${{ matrix.module_name }}-$version.tgz index.yaml ../packages/
 
       - name: Commit and push updated Helm packages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd packages
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+
           if [[ -n "$(git status --porcelain)" ]]; then
             git add .
-            git commit -m "update Helm chart package for ${{ matrix.module_name }}"
+            git commit -m "${{ matrix.module_name }}: update package and index.yaml"
             git push
           else
             echo "No changes to commit in packages/"
