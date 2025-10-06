@@ -209,7 +209,7 @@ jobs:
           git tag -a "${{ matrix.module_name }}-${{ fromJson(steps.read.outputs.result).new_tag[format('{0}', matrix.module_name )] }}" -m "Version ${{ fromJson(steps.read.outputs.result).new_tag[format('{0}', matrix.module_name )] }}" "${{ steps.moduleSha.outputs.sha }}"
           git push origin ${{ matrix.module_name }}-${{ fromJson(steps.read.outputs.result).new_tag[format('{0}', matrix.module_name )] }}
   
-  preview-helm-charts:
+preview-helm-charts:
     needs:
       - generate-matrix
     runs-on: ubuntu-22.04
@@ -229,25 +229,24 @@ jobs:
         with:
           version: ${{ env.HELM_VERSION }}
 
-      - name: Preview Helm Chart
+      - name: Preview Helm Chart package
         run: |
+          echo "📦 Packaging Helm chart for preview: ${{ matrix.module_name }}"
           cd ${{ matrix.module_path }}
-          echo "📦 Previewing Helm chart: ${{ matrix.module_name }}"
+          helm package . --destination ../packages
 
-          # Package chart (Helm reads version from Chart.yaml automatically)
-          helm package . 
-
-          # Merge index safely if it exists
+          TEMP_INDEX="../packages/index.yaml.tmp"
           if [ -f ../packages/index.yaml ]; then
-            helm repo index --merge ../packages/index.yaml .
+            helm repo index ../packages --merge ../packages/index.yaml -o $TEMP_INDEX
+            # Keep old timestamps for old versions
+            yq -i 'del(.entries["'"${{ matrix.module_name }}"'-*.tgz"][])' $TEMP_INDEX
+            yq -i '.entries += load("../packages/index.yaml").entries' $TEMP_INDEX
           else
-            helm repo index .
+            helm repo index ../packages -o $TEMP_INDEX
           fi
+          mv $TEMP_INDEX ../packages/index.yaml
 
-          # Move artifacts to packages/
-          mv *.tgz index.yaml ../packages/
-
-      - name: Commit and push preview changes
+      - name: Commit and push preview
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -258,12 +257,10 @@ jobs:
             git commit -m "ci(preview): update Helm chart preview for ${{ matrix.module_name }}"
             git push origin HEAD:${{ github.head_ref }}
           else
-            echo "✅ No changes to preview"
-
+            echo "✅ No chart changes to preview"
 
   package-helm-charts:
     needs:
-      - create-tag
       - generate-matrix
     runs-on: ubuntu-22.04
     strategy:
@@ -283,34 +280,28 @@ jobs:
 
       - name: Package Helm Chart (Publish)
         run: |
+          echo "📦 Packaging Helm chart for release: ${{ matrix.module_name }}"
           cd ${{ matrix.module_path }}
-          echo "📦 Packaging Helm chart: ${{ matrix.module_name }}"
+          helm package . --destination ../packages
 
-          if [ ! -f Chart.yaml ]; then
-            echo "❌ Skipping: Chart.yaml not found"
-            exit 0
-          fi
-
-          # Package chart
-          helm package .
-
-          # Merge index safely
+          TEMP_INDEX="../packages/index.yaml.tmp"
           if [ -f ../packages/index.yaml ]; then
-            helm repo index --merge ../packages/index.yaml .
+            helm repo index ../packages --merge ../packages/index.yaml -o $TEMP_INDEX
+            yq -i 'del(.entries["'"${{ matrix.module_name }}"'-*.tgz"][])' $TEMP_INDEX
+            yq -i '.entries += load("../packages/index.yaml").entries' $TEMP_INDEX
           else
-            helm repo index .
+            helm repo index ../packages -o $TEMP_INDEX
           fi
-
-          # Move files to packages/
-          mv *.tgz index.yaml ../packages/
+          mv $TEMP_INDEX ../packages/index.yaml
 
       - name: Commit and push updated packages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          cd packages
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add packages/
+          git add .
           if [[ -n "$(git status --porcelain)" ]]; then
             git commit -m "ci: update Helm chart package for ${{ matrix.module_name }}"
             git push
