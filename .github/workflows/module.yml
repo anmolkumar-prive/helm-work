@@ -90,7 +90,7 @@ jobs:
   package-helm-charts:
     needs: generate-matrix
     runs-on: ubuntu-22.04
-    if: github.event.pull_request.merged == true
+    if: github.event.pull_request.merged == true && needs.generate-matrix.outputs.matrix != '{"include":[]}'
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
@@ -141,10 +141,9 @@ jobs:
           fi
 
   tag-helm-charts:
-    name: Create Git Tag for Helm Chart
-    needs: [package-helm-charts]
+    needs: package-helm-charts
     runs-on: ubuntu-22.04
-    if: github.event.pull_request.merged == true
+    if: github.event.pull_request.merged == true && needs.generate-matrix.outputs.matrix != '{"include":[]}'
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
