@@ -147,19 +147,27 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
+          TAG="${{ steps.get_version.outputs.version }}"
+
+          echo "Preparing to create tag: $TAG"
           git fetch --tags
+          git log -1 --oneline
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
 
-          TAG="${{ steps.get_version.outputs.version }}"
-
-          # If tag already exists, delete it to re-create
+          # Delete tag if it exists
           if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists. Updating it to latest commit."
+            echo "Tag $TAG already exists. Deleting it."
             git tag -d "$TAG"
             git push origin ":refs/tags/$TAG"
           fi
 
+          echo "Creating tag $TAG at commit:"
+          git rev-parse HEAD
+
           git tag -a "$TAG" -m "Release $TAG"
           git push origin "$TAG"
+
+          echo "✅ Tag $TAG pushed successfully!"
