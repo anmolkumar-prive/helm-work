@@ -256,6 +256,7 @@ jobs:
             git push origin HEAD:${{ github.head_ref }}
           else
             echo "✅ No changes to preview"
+          fi
 
 
   package-helm-charts:
@@ -291,7 +292,6 @@ jobs:
             helm repo index ../packages --merge ../packages/index.yaml
           else
             helm repo index ../packages
-
           fi
 
       - name: Commit and push updated Helm packages
@@ -306,3 +306,4 @@ jobs:
             git push
           else
             echo "✅ No changes to commit in packages/"
+          fi
