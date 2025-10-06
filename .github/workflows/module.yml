@@ -194,7 +194,7 @@ jobs:
         id: moduleSha
         run: |
           pwd
-          module_sha=$(git log -1 --format="%H" -- ${{ matrix.module_path}})
+          module_sha=$(git log -1 --format="%H" -- ${{ matrix.module}})
           echo "sha=$module_sha" >> $GITHUB_OUTPUT
 
       - name: Create Tag
