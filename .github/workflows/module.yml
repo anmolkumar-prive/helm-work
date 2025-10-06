@@ -150,7 +150,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
 
-          TAG="${{ matrix.module_name }}-${{ steps.get_version.outputs.version }}"
+          TAG="${{ steps.get_version.outputs.version }}"
 
           # Always create or update the tag to ensure the latest version is reflected
           if git rev-parse "$TAG" >/dev/null 2>&1; then
