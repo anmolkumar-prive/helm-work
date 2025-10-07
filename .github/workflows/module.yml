@@ -79,7 +79,7 @@ jobs:
           ref: main
           path: main_branch
 
-            - name: Compare versions and build comment
+      - name: Compare versions and build comment
         id: build_comment
         run: |
           echo "# Helm Chart Version Changes" > prepare_comment.txt
