@@ -30,7 +30,12 @@ jobs:
       - name: Get changed Helm chart directories
         id: changed-directories
         run: |
-          list_changed_files=$(git diff --name-only origin/main...HEAD)
+          echo "🔍 Detecting changed Helm charts..."
+          if [ "${{ github.event_name }}" == "pull_request_target" ]; then
+            list_changed_files=$(git diff --name-only HEAD^1...HEAD)
+          else
+            list_changed_files=$(git diff --name-only origin/main...HEAD)
+          fi
           declare -a matrix
           for file in $list_changed_files; do
             dir=$(dirname "$file")
@@ -41,8 +46,10 @@ jobs:
           done
           if [ -z "$matrix" ]; then
             echo "matrix={\"include\":[]}" >> $GITHUB_OUTPUT
+            echo "ℹ️ No charts changed."
           else
             echo "matrix={\"include\":[${matrix%,}]}" >> $GITHUB_OUTPUT
+            echo "✅ Changed chart directories detected."
           fi
 
   preview-helm-charts:
@@ -51,6 +58,7 @@ jobs:
     if: github.event_name == 'pull_request'
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     name: Preview Helm Chart Packaging
     steps:
@@ -67,32 +75,42 @@ jobs:
 
       - name: Preview Helm Chart packaging
         run: |
+          mkdir -p ../packages
           cd ${{ matrix.module_path }}
+          echo "📦 Packaging preview chart: ${{ matrix.module_name }}"
           helm package .
-          helm repo index --merge ../packages/index.yaml .
-          mv ./*.tgz index.yaml ../packages/
+          cd ..
+          if [ -f "packages/index.yaml" ]; then
+            helm repo index ${{ matrix.module_path }} --merge packages/index.yaml --url https://example.com/charts
+          else
+            helm repo index ${{ matrix.module_path }} --url https://example.com/charts
+          fi
+          mv ${{ matrix.module_path }}/*.tgz ${{ matrix.module_path }}/index.yaml packages/
+          echo "🔍 Contents of packages directory:"
+          ls -l packages/
 
       - name: Commit preview chart
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cd packages
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if [[ -n "$(git status --porcelain)" ]]; then
-            git add .
+          git add packages/
+          if ! git diff --cached --quiet; then
             git commit -m "Preview Helm chart for ${{ matrix.module_name }}"
             git push origin HEAD:${{ github.head_ref }}
+            echo "✅ Preview package committed for ${{ matrix.module_name }}"
           else
-            echo "No changes"
+            echo "ℹ️ No preview changes to commit."
           fi
 
   package-helm-charts:
     needs: generate-matrix
     runs-on: ubuntu-22.04
-    if: github.event.pull_request.merged == true
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     steps:
       - name: Checkout code
@@ -100,6 +118,7 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+          ref: main
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
@@ -118,35 +137,44 @@ jobs:
 
       - name: Package Helm chart and update index
         run: |
+          mkdir -p packages
           cd "${{ matrix.module_path }}"
+          echo "📦 Packaging final chart: ${{ matrix.module_name }}"
           helm package . --version "${{ steps.get_version.outputs.version }}"
-          helm repo index --merge ../packages/index.yaml .
+          if [ -f "../packages/index.yaml" ]; then
+            helm repo index . --merge ../packages/index.yaml --url https://example.com/charts
+          else
+            helm repo index . --url https://example.com/charts
+          fi
           mv ./*.tgz index.yaml ../packages/
+          echo "🔍 Contents of packages directory:"
+          ls -l ../packages/
 
       - name: Commit and push packaged charts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cd packages
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
 
-          if [[ -n "$(git status --porcelain)" ]]; then
-            git add .
+          git add packages/
+          if ! git diff --cached --quiet; then
             git commit -m "Release ${{ matrix.module_name }} version ${{ steps.get_version.outputs.version }}"
-            git push
+            git push origin main
+            echo "✅ Committed and pushed changes for ${{ matrix.module_name }}"
           else
-            echo "No changes detected in packages/, skipping commit."
+            echo "ℹ️ No changes detected in packages/, skipping commit."
           fi
 
   tag-helm-charts:
     name: Create Git Tag for Helm Chart
     needs: [generate-matrix, package-helm-charts]
     runs-on: ubuntu-22.04
-    if: github.event.pull_request.merged == true
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     steps:
       - name: Checkout main branch
@@ -155,6 +183,9 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           ref: main
+
+      - name: Pull latest main
+        run: git pull origin main
 
       - name: Extract version from Chart.yaml
         id: get_version
@@ -176,12 +207,12 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
 
-          TAG="${{ matrix.module_name }}-${{ steps.get_version.outputs.version }}"
+          TAG="${{ matrix.module_name }}-v${{ steps.get_version.outputs.version }}"
 
           if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists. Skipping."
+            echo "⚠️ Tag $TAG already exists. Skipping."
           else
             git tag -a "$TAG" -m "Release $TAG" "${{ steps.get_commit_sha.outputs.sha }}"
             git push origin "$TAG"
+            echo "✅ Tag pushed: $TAG"
           fi
-
