@@ -79,7 +79,7 @@ jobs:
           ref: main
           path: main_branch
 
-      - name: Compare versions and build comment
+            - name: Compare versions and build comment
         id: build_comment
         run: |
           echo "# Helm Chart Version Changes" > prepare_comment.txt
@@ -88,9 +88,9 @@ jobs:
 
           changed=$(echo '${{ needs.generate-matrix.outputs.matrix }}' | jq -c '.include[]')
 
-          has_change=false
+          any_change=false
 
-          echo "$changed" | while read -r item; do
+          for item in $(echo "$changed"); do
             module_path=$(echo "$item" | jq -r '.module_path')
             module_name=$(echo "$item" | jq -r '.module_name')
 
@@ -99,11 +99,11 @@ jobs:
 
             if [ "$new_ver" != "$old_ver" ]; then
               echo "| $module_name | $old_ver | $new_ver |" >> prepare_comment.txt
-              has_change=true
+              any_change=true
             fi
           done
 
-          if [ "$has_change" = false ]; then
+          if [ "$any_change" = false ]; then
             echo "ℹ️ No chart version changes detected."
             echo "No chart version changes found." > prepare_comment.txt
           fi
