@@ -142,7 +142,7 @@ jobs:
 
   tag-helm-charts:
     name: Create Git Tag for Helm Chart
-    needs: [package-helm-charts]
+    needs: [generate-matrix, package-helm-charts]
     runs-on: ubuntu-22.04
     if: github.event.pull_request.merged == true
     strategy:
@@ -160,11 +160,13 @@ jobs:
         id: get_version
         run: |
           version=$(grep '^version:' "${{ matrix.module_path }}/Chart.yaml" | head -1 | sed 's/version:[[:space:]]*//')
-          if [ -z "$version" ]; then
-            echo "ERROR: Version not found in Chart.yaml"
-            exit 1
-          fi
           echo "version=$version" >> $GITHUB_OUTPUT
+
+      - name: Get latest commit for module
+        id: get_commit_sha
+        run: |
+          sha=$(git log -1 --format="%H" -- "${{ matrix.module_path }}")
+          echo "sha=$sha" >> $GITHUB_OUTPUT
 
       - name: Create and push Git tag
         env:
@@ -173,12 +175,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
-          
+
           TAG="${{ matrix.module_name }}-${{ steps.get_version.outputs.version }}"
-          
+
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "Tag $TAG already exists. Skipping."
           else
-            git tag -a "$TAG" -m "Release $TAG"
+            git tag -a "$TAG" -m "Release $TAG" "${{ steps.get_commit_sha.outputs.sha }}"
             git push origin "$TAG"
           fi
+
