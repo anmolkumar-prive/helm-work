@@ -52,6 +52,70 @@ jobs:
             echo "✅ Changed chart directories detected."
           fi
 
+  comment-version-change:
+    name: Comment Helm Chart Version Change
+    needs: [generate-matrix]
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout PR branch (head)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+
+      - name: Copy head chart.yaml files
+        run: |
+          mkdir -p head_charts
+          for module in $(echo '${{ needs.generate-matrix.outputs.matrix }}' | jq -r '.include[].module_path'); do
+            mkdir -p "head_charts/$module"
+            cp "$module/Chart.yaml" "head_charts/$module/"
+          done
+
+      - name: Checkout base branch (main)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+          path: main_branch
+
+      - name: Compare versions and build comment
+        id: build_comment
+        run: |
+          echo "# Helm Chart Version Changes" > prepare_comment.txt
+          echo "| Chart | Previous Version | New Version |" >> prepare_comment.txt
+          echo "|-------|------------------|-------------|" >> prepare_comment.txt
+
+          changed=$(echo '${{ needs.generate-matrix.outputs.matrix }}' | jq -c '.include[]')
+
+          has_change=false
+
+          echo "$changed" | while read -r item; do
+            module_path=$(echo "$item" | jq -r '.module_path')
+            module_name=$(echo "$item" | jq -r '.module_name')
+
+            new_ver=$(grep '^version:' "head_charts/$module_path/Chart.yaml" | sed 's/version:[[:space:]]*//')
+            old_ver=$(grep '^version:' "main_branch/$module_path/Chart.yaml" | sed 's/version:[[:space:]]*//')
+
+            if [ "$new_ver" != "$old_ver" ]; then
+              echo "| $module_name | $old_ver | $new_ver |" >> prepare_comment.txt
+              has_change=true
+            fi
+          done
+
+          if [ "$has_change" = false ]; then
+            echo "ℹ️ No chart version changes detected."
+            echo "No chart version changes found." > prepare_comment.txt
+          fi
+
+      - name: Comment on PR
+        uses: thollander/actions-comment-pull-request@v3
+        with:
+          file-path: prepare_comment.txt
+          comment-tag: helm_version_change
+          mode: recreate
+
+
   preview-helm-charts:
     needs: [generate-matrix]
     runs-on: ubuntu-22.04
