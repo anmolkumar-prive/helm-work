@@ -58,7 +58,7 @@ jobs:
           fi
 
   preview:
-    name: 🧩 Preview Helm Packaging
+    name: 🧩 Preview Helm Packaging (Show in PR)
     needs: [generate-matrix]
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-22.04
@@ -66,34 +66,51 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ github.head_ref }}
 
-      - uses: azure/setup-helm@v4
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
         with:
           version: ${{ env.HELM_VERSION }}
 
-      - name: 📦 Package and Index (Preview)
+      - name: 📦 Package and Generate Index (Preview)
         run: |
           mkdir -p packages
           cd "${{ matrix.module_path }}"
-          echo "📦 Packaging chart: ${{ matrix.module_name }}"
-          helm package . --destination ../../packages
-          cd ../../packages
-          helm repo index . --url https://example.com/charts
+          echo "📦 Packaging preview chart: ${{ matrix.module_name }}"
 
-      - name: 💾 Commit Preview Artifacts
+          # Package chart into shared /packages dir
+          helm package . --destination ../../packages
+
+          cd ../../packages
+
+          # Merge with existing index.yaml if present
+          if [ -f index.yaml ]; then
+            helm repo index . --merge index.yaml --url https://example.com/charts
+          else
+            helm repo index . --url https://example.com/charts
+          fi
+
+          ls -l packages || true
+
+      - name: 💾 Commit Preview Artifacts to PR Branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add packages
+          git add packages/
+          
           if ! git diff --cached --quiet; then
             git commit -m "📦 Preview Helm chart for ${{ matrix.module_name }}"
             git push origin HEAD:${{ github.head_ref }}
+            echo "✅ Preview package committed for ${{ matrix.module_name }}"
           else
-            echo "No changes to commit."
+            echo "ℹ️ No preview changes to commit."
           fi
 
   release:
@@ -105,44 +122,68 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout main
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: main
           fetch-tags: true
 
-      - uses: azure/setup-helm@v4
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
         with:
           version: ${{ env.HELM_VERSION }}
 
-      - name: 📦 Final Package and Index
+      - name: Extract chart version
+        id: get_version
+        run: |
+          version=$(grep '^version:' "${{ matrix.module_path }}/Chart.yaml" | head -1 | sed 's/version:[[:space:]]*//')
+          if [ -z "$version" ]; then
+            echo "ERROR: Version not found in Chart.yaml"
+            exit 1
+          fi
+          echo "version=$version" >> $GITHUB_OUTPUT
+
+      - name: 📦 Package chart and update index
         run: |
           mkdir -p packages
           cd "${{ matrix.module_path }}"
           echo "📦 Packaging final chart: ${{ matrix.module_name }}"
-          helm package . --destination ../../packages
-          cd ../../packages
-          helm repo index . --url https://example.com/charts
 
-      - name: 💾 Commit Final Chart Artifacts
+          # Package chart with correct version
+          helm package . --version "${{ steps.get_version.outputs.version }}" --destination ../../packages
+
+          cd ../../packages
+
+          # Merge with existing index.yaml if exists
+          if [ -f index.yaml ]; then
+            helm repo index . --merge index.yaml --url https://example.com/charts
+          else
+            helm repo index . --url https://example.com/charts
+          fi
+
+          ls -l
+
+      - name: 💾 Commit packaged charts and index
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
 
-          git add packages
+          git add packages/
           if ! git diff --cached --quiet; then
-            git commit -m "🚀 Release Helm chart ${{ matrix.module_name }}"
+            git commit -m "🚀 Release ${{ matrix.module_name }} v${{ steps.get_version.outputs.version }}"
             git push origin main
           else
-            echo "No changes to commit."
+            echo "No changes detected in packages/, skipping commit."
           fi
 
       - name: 🏷️ Create Git Tag (Chart Version)
         run: |
-          version=$(grep '^version:' "${{ matrix.module_path }}/Chart.yaml" | awk '{print $2}')
           chart_name=$(basename "${{ matrix.module_path }}")
-          tag_name="${chart_name}-v${version}"
+          tag_name="${chart_name}-v${{ steps.get_version.outputs.version }}"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
