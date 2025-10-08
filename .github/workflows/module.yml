@@ -125,8 +125,6 @@ jobs:
       max-parallel: 1
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     name: Preview Helm Chart Packaging
-    env:
-      HELM_REPO_URL: ${{ secrets.HELM_REPO_URL }}  # ← Add this line
     steps:
       - name: Checkout PR branch
         uses: actions/checkout@v4
@@ -147,9 +145,9 @@ jobs:
           helm package .
           cd ..
           if [ -f "packages/index.yaml" ]; then
-            helm repo index ${{ matrix.module_path }} --merge packages/index.yaml --url ${{ env.HELM_REPO_URL }}
+            helm repo index ${{ matrix.module_path }} --merge packages/index.yaml 
           else
-            helm repo index ${{ matrix.module_path }} --url ${{ env.HELM_REPO_URL }}
+            helm repo index ${{ matrix.module_path }} 
           fi
           mv ${{ matrix.module_path }}/*.tgz ${{ matrix.module_path }}/index.yaml packages/
           echo "Contents of packages directory:"
@@ -201,17 +199,15 @@ jobs:
           echo "version=$version" >> $GITHUB_OUTPUT
 
       - name: Package Helm chart and update index
-        env:
-          HELM_REPO_URL: ${{ secrets.HELM_REPO_URL }}  # ← Add this line
         run: |
           mkdir -p packages
           cd "${{ matrix.module_path }}"
           echo "Packaging final chart: ${{ matrix.module_name }}"
           helm package . --version "${{ steps.get_version.outputs.version }}"
           if [ -f "../packages/index.yaml" ]; then
-            helm repo index . --merge ../packages/index.yaml --url ${{ env.HELM_REPO_URL }}
+            helm repo index . --merge ../packages/index.yaml
           else
-            helm repo index . --url ${{ env.HELM_REPO_URL }}
+            helm repo index .
           fi
           mv ./*.tgz index.yaml ../packages/
           echo "Contents of packages directory:"
