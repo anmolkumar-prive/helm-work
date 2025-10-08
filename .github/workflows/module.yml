@@ -14,6 +14,8 @@ permissions:
 env:
   DEFAULT_MODULE_VERSION: "0.1.0"
   HELM_VERSION: 3.10.0
+  HELM_REPO_URL: ${{ secrets.HELM_REPO_URL }}
+
 
 jobs:
 
@@ -30,7 +32,7 @@ jobs:
       - name: Get changed Helm chart directories
         id: changed-directories
         run: |
-          echo "🔍 Detecting changed Helm charts..."
+          echo "Detecting changed Helm charts..."
           if [ "${{ github.event_name }}" == "pull_request_target" ]; then
             list_changed_files=$(git diff --name-only HEAD^1...HEAD)
           else
@@ -46,10 +48,10 @@ jobs:
           done
           if [ -z "$matrix" ]; then
             echo "matrix={\"include\":[]}" >> $GITHUB_OUTPUT
-            echo "ℹ️ No charts changed."
+            echo "No charts changed."
           else
             echo "matrix={\"include\":[${matrix%,}]}" >> $GITHUB_OUTPUT
-            echo "✅ Changed chart directories detected."
+            echo "Changed chart directories detected."
           fi
 
   comment-version-change:
@@ -104,7 +106,7 @@ jobs:
           done
 
           if [ "$any_change" = false ]; then
-            echo "ℹ️ No chart version changes detected."
+            echo "No chart version changes detected."
             echo "No chart version changes found." > prepare_comment.txt
           fi
 
@@ -141,16 +143,16 @@ jobs:
         run: |
           mkdir -p ../packages
           cd ${{ matrix.module_path }}
-          echo "📦 Packaging preview chart: ${{ matrix.module_name }}"
+          echo "Packaging preview chart: ${{ matrix.module_name }}"
           helm package .
           cd ..
           if [ -f "packages/index.yaml" ]; then
-            helm repo index ${{ matrix.module_path }} --merge packages/index.yaml --url https://example.com/charts
+            helm repo index ${{ matrix.module_path }} --merge packages/index.yaml --url ${{ env.HELM_REPO_URL }}
           else
-            helm repo index ${{ matrix.module_path }} --url https://example.com/charts
+            helm repo index ${{ matrix.module_path }} --url ${{ env.HELM_REPO_URL }}
           fi
           mv ${{ matrix.module_path }}/*.tgz ${{ matrix.module_path }}/index.yaml packages/
-          echo "🔍 Contents of packages directory:"
+          echo "Contents of packages directory:"
           ls -l packages/
 
       - name: Commit preview chart
@@ -163,9 +165,9 @@ jobs:
           if ! git diff --cached --quiet; then
             git commit -m "Preview Helm chart for ${{ matrix.module_name }}"
             git push origin HEAD:${{ github.head_ref }}
-            echo "✅ Preview package committed for ${{ matrix.module_name }}"
+            echo "Preview package committed for ${{ matrix.module_name }}"
           else
-            echo "ℹ️ No preview changes to commit."
+            echo "No preview changes to commit."
           fi
 
   package-helm-charts:
@@ -181,7 +183,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          fetch-tags: true
           ref: main
 
       - name: Set up Helm
@@ -203,15 +204,15 @@ jobs:
         run: |
           mkdir -p packages
           cd "${{ matrix.module_path }}"
-          echo "📦 Packaging final chart: ${{ matrix.module_name }}"
+          echo "Packaging final chart: ${{ matrix.module_name }}"
           helm package . --version "${{ steps.get_version.outputs.version }}"
           if [ -f "../packages/index.yaml" ]; then
-            helm repo index . --merge ../packages/index.yaml --url https://example.com/charts
+            helm repo index . --merge ../packages/index.yaml --url ${{ env.HELM_REPO_URL }}
           else
-            helm repo index . --url https://example.com/charts
+            helm repo index . --url ${{ env.HELM_REPO_URL }}
           fi
           mv ./*.tgz index.yaml ../packages/
-          echo "🔍 Contents of packages directory:"
+          echo "Contents of packages directory:"
           ls -l ../packages/
 
       - name: Commit and push packaged charts
@@ -226,9 +227,9 @@ jobs:
           if ! git diff --cached --quiet; then
             git commit -m "Release ${{ matrix.module_name }} version ${{ steps.get_version.outputs.version }}"
             git push origin main
-            echo "✅ Committed and pushed changes for ${{ matrix.module_name }}"
+            echo "Committed and pushed changes for ${{ matrix.module_name }}"
           else
-            echo "ℹ️ No changes detected in packages/, skipping commit."
+            echo "No changes detected in packages/, skipping commit."
           fi
 
   tag-helm-charts:
@@ -274,9 +275,9 @@ jobs:
           TAG="${{ matrix.module_name }}-v${{ steps.get_version.outputs.version }}"
 
           if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "⚠️ Tag $TAG already exists. Skipping."
+            echo "Tag $TAG already exists. Skipping."
           else
             git tag -a "$TAG" -m "Release $TAG" "${{ steps.get_commit_sha.outputs.sha }}"
             git push origin "$TAG"
-            echo "✅ Tag pushed: $TAG"
+            echo "Tag pushed: $TAG"
           fi
