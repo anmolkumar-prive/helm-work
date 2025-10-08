@@ -12,7 +12,6 @@ permissions:
   pull-requests: write
 
 env:
-  DEFAULT_MODULE_VERSION: "0.1.0"
   HELM_VERSION: 3.10.0
 
 jobs:
