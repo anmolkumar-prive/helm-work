@@ -15,7 +15,7 @@ entries:
     appVersion: 1.16.0
     created: "2025-10-09T18:28:41.751844097Z"
     description: A Helm chart for Kubernetes
-    digest: d5b2bcf6309e707920f89d8a25c53f5ecc0cdab82930f308d7b694c996d8802d
+    digest: f66ec27b60fa505ceb55b506b80ba3a594255f9c5cd98c38dfbd25587136577e
     name: myapp
     type: application
     urls:
