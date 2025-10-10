@@ -33,7 +33,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             list_changed_files=$(git diff --name-only origin/main...HEAD)
           else
-            list_changed_files=$(git diff-tree --no-commit-id --name-only -r HEAD)
+            list_changed_files=$(git diff --name-only HEAD^1...HEAD)
           fi
           declare -a matrix
           for file in $list_changed_files; do
