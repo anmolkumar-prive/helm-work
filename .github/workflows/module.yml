@@ -19,7 +19,7 @@ jobs:
 
   generate-matrix:
     name: Generate matrix
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.changed-directories.outputs.matrix }}
     steps:
@@ -54,7 +54,7 @@ jobs:
   comment-version-change:
     name: Comment Helm Chart Version Change
     needs: [generate-matrix]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     if: github.event_name == 'pull_request'
     steps:
       - name: Checkout PR branch (head)
@@ -116,7 +116,7 @@ jobs:
 
   preview-helm-charts:
     needs: [generate-matrix]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     if: github.event_name == 'pull_request'
     strategy:
       fail-fast: false
@@ -168,7 +168,7 @@ jobs:
 
   package-helm-charts:
     needs: generate-matrix
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     strategy:
       fail-fast: false
@@ -231,7 +231,7 @@ jobs:
   tag-helm-charts:
     name: Create Git Tag for Helm Chart
     needs: [generate-matrix, package-helm-charts]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     strategy:
       fail-fast: false
