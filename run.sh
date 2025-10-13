@@ -2,7 +2,7 @@
 
 echo "Switching to main branch..."
 git checkout main
-
+git pull
 echo "Deleting 'test1' branch (after merge)..."
 git branch -d test1
 
