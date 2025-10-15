@@ -34,12 +34,12 @@ jobs:
           else
             list_changed_files=$(git diff --name-only origin/main...HEAD)
           fi
-          declare -a matrix
+          matrix=""
           for file in $list_changed_files; do
             dir=$(dirname "$file")
             if [ -f "$dir/Chart.yaml" ]; then
               module_name=$(echo "$dir" | sed 's/\\//_/g')
-              matrix+="{\"module_name\": \"$module_name\", \"module_path\": \"$dir\"},"
+              matrix="${matrix}{\"module_name\": \"$module_name\", \"module_path\": \"$dir\"},"
             fi
           done
           if [ -z "$matrix" ]; then
@@ -290,7 +290,7 @@ jobs:
 
           TAG="${{ matrix.module_name }}-v${{ steps.get_version.outputs.version }}"
 
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
+          if git ls-remote --tags origin | grep -q "refs/tags/$TAG"; then
             echo "Tag $TAG already exists. Skipping."
           else
             git tag -a "$TAG" -m "Release $TAG" "${{ steps.get_commit_sha.outputs.sha }}"
