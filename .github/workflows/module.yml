@@ -38,7 +38,7 @@ jobs:
           for file in $list_changed_files; do
             dir=$(dirname "$file")
             if [ -f "$dir/Chart.yaml" ]; then
-              module_name=$(echo "$dir" | sed 's/\\//_/g')
+              module_name=$(echo "$dir" | sed 's/\//_/g')
               matrix="${matrix}{\"module_name\": \"$module_name\", \"module_path\": \"$dir\"},"
             fi
           done
