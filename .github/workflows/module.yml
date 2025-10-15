@@ -15,7 +15,6 @@ env:
   HELM_VERSION: 3.10.0
 
 jobs:
-
   generate-matrix:
     name: Generate matrix
     runs-on: ubuntu-22.04
@@ -39,7 +38,7 @@ jobs:
           for file in $list_changed_files; do
             dir=$(dirname "$file")
             if [ -f "$dir/Chart.yaml" ]; then
-              module_name=$(echo "$dir" | sed 's/\//_/g')
+              module_name=$(echo "$dir" | sed 's/\\//_/g')
               matrix+="{\"module_name\": \"$module_name\", \"module_path\": \"$dir\"},"
             fi
           done
@@ -135,23 +134,33 @@ jobs:
         with:
           version: ${{ env.HELM_VERSION }}
 
-      - name: Preview Helm Chart packaging
+      - name: Stage preview chart
         run: |
-          mkdir -p ../packages
+          mkdir -p packages
           cd ${{ matrix.module_path }}
           echo "Packaging preview chart: ${{ matrix.module_name }}"
           helm package .
-          cd ..
-          if [ -f "packages/index.yaml" ]; then
-            helm repo index ${{ matrix.module_path }} --merge packages/index.yaml 
+          if [ -f "../packages/index.yaml" ]; then
+            helm repo index . --merge ../packages/index.yaml 
           else
-            helm repo index ${{ matrix.module_path }} 
+            helm repo index . 
           fi
-          mv ${{ matrix.module_path }}/*.tgz ${{ matrix.module_path }}/index.yaml packages/
+          mv *.tgz index.yaml ../packages/
           echo "Contents of packages directory:"
-          ls -l packages/
+          ls -l ../packages/
 
-      - name: Commit preview chart
+  commit-preview-changes:
+    needs: [preview-helm-charts]
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+
+      - name: Commit and push preview changes
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -159,15 +168,15 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add packages/
           if ! git diff --cached --quiet; then
-            git commit -m "Preview Helm chart for ${{ matrix.module_name }}"
+            git commit -m "Preview Helm charts [skip ci]"
             git push origin HEAD:${{ github.head_ref }}
-            echo "Preview package committed for ${{ matrix.module_name }}"
+            echo "Preview packages committed"
           else
             echo "No preview changes to commit."
           fi
 
   package-helm-charts:
-    needs: generate-matrix
+    needs: [generate-matrix]
     runs-on: ubuntu-22.04
     if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true
     strategy:
@@ -196,7 +205,7 @@ jobs:
           fi
           echo "version=$version" >> $GITHUB_OUTPUT
 
-      - name: Package Helm chart and update index
+      - name: Stage packaged charts
         run: |
           mkdir -p packages
           cd "${{ matrix.module_path }}"
@@ -211,6 +220,17 @@ jobs:
           echo "Contents of packages directory:"
           ls -l ../packages/
 
+  commit-release-changes:
+    needs: [package-helm-charts]
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          ref: main
+
       - name: Commit and push packaged charts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -218,14 +238,14 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
-
+          
           git add packages/
           if ! git diff --cached --quiet; then
-            git commit -m "Release ${{ matrix.module_name }} version ${{ steps.get_version.outputs.version }}"
+            git commit -m "Release Helm charts [skip ci]"
             git push origin main
-            echo "Committed and pushed changes for ${{ matrix.module_name }}"
+            echo "Released packages committed"
           else
-            echo "No changes detected in packages/, skipping commit."
+            echo "No release changes to commit."
           fi
 
   tag-helm-charts:
