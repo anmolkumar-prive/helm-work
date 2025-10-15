@@ -89,18 +89,23 @@ jobs:
 
           changed=$(echo '${{ needs.generate-matrix.outputs.matrix }}' | jq -c '.include[]')
 
+          declare -A seen_modules=()
           any_change=false
 
           for item in $(echo "$changed"); do
             module_path=$(echo "$item" | jq -r '.module_path')
             module_name=$(echo "$item" | jq -r '.module_name')
 
-            new_ver=$(grep '^version:' "head_charts/$module_path/Chart.yaml" | sed 's/version:[[:space:]]*//')
-            old_ver=$(grep '^version:' "main_branch/$module_path/Chart.yaml" | sed 's/version:[[:space:]]*//')
+            if [[ -z "${seen_modules[$module_path]}" ]]; then
+              seen_modules[$module_path]=1
 
-            if [ "$new_ver" != "$old_ver" ]; then
-              echo "| $module_name | $old_ver | $new_ver |" >> prepare_comment.txt
-              any_change=true
+              new_ver=$(grep '^version:' "head_charts/$module_path/Chart.yaml" | sed 's/version:[[:space:]]*//')
+              old_ver=$(grep '^version:' "main_branch/$module_path/Chart.yaml" | sed 's/version:[[:space:]]*//')
+
+              if [ "$new_ver" != "$old_ver" ]; then
+                echo "| $module_name | $old_ver | $new_ver |" >> prepare_comment.txt
+                any_change=true
+              fi
             fi
           done
 
