@@ -60,25 +60,13 @@ jobs:
     if: github.event_name == 'pull_request'
     steps:
       - name: Checkout PR branch (head)
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ github.head_ref }}
 
-      - name: Copy head chart.yaml files
-        run: |
-          mkdir -p head_charts
-          for module in $(echo '${{ needs.generate-matrix.outputs.matrix }}' | jq -r '.include[].module_path'); do
-            mkdir -p "head_charts/$module"
-            cp "$module/Chart.yaml" "head_charts/$module/"
-          done
-
-      - name: Checkout base branch (main)
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          fetch-depth: 0
-          ref: main
-          path: main_branch
+      - name: Fetch main branch
+        run: git fetch origin main
 
       - name: Compare versions and build comment
         id: build_comment
@@ -88,19 +76,15 @@ jobs:
           echo "|-------|------------------|-------------|" >> prepare_comment.txt
 
           changed=$(echo '${{ needs.generate-matrix.outputs.matrix }}' | jq -c '.include[]')
-
-          declare -A seen_modules=()
           any_change=false
 
           for item in $(echo "$changed"); do
             module_path=$(echo "$item" | jq -r '.module_path')
             module_name=$(echo "$item" | jq -r '.module_name')
 
-            if [[ -z "${seen_modules[$module_path]}" ]]; then
-              seen_modules[$module_path]=1
-
-              new_ver=$(grep '^version:' "head_charts/$module_path/Chart.yaml" | sed 's/version:[[:space:]]*//')
-              old_ver=$(grep '^version:' "main_branch/$module_path/Chart.yaml" | sed 's/version:[[:space:]]*//')
+            if [ -f "$module_path/Chart.yaml" ]; then
+              new_ver=$(grep '^version:' "$module_path/Chart.yaml" | sed 's/version:[[:space:]]*//')
+              old_ver=$(git show origin/main:"$module_path/Chart.yaml" | grep '^version:' | sed 's/version:[[:space:]]*//')
 
               if [ "$new_ver" != "$old_ver" ]; then
                 echo "| $module_name | $old_ver | $new_ver |" >> prepare_comment.txt
@@ -110,7 +94,6 @@ jobs:
           done
 
           if [ "$any_change" = false ]; then
-            echo "No chart version changes detected."
             echo "No chart version changes found." > prepare_comment.txt
           fi
 
@@ -120,6 +103,7 @@ jobs:
           file-path: prepare_comment.txt
           comment-tag: helm_version_change
           mode: recreate
+
 
   preview-helm-charts:
     needs: generate-matrix
