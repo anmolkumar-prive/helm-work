@@ -1,8 +1,9 @@
-name: Release Helm Chart
+name: Release Helm chart
 
 on:
   pull_request:
-    branches: [main]
+    branches:
+      - main
   pull_request_target:
     types: [closed]
 
@@ -15,152 +16,206 @@ env:
 
 jobs:
 
-  # 1️⃣ Detect changed Helm charts
   generate-matrix:
-    runs-on: ubuntu-latest
+    name: Generate matrix
+    runs-on: ubuntu-24.04
     outputs:
-      matrix: ${{ steps.changed.outputs.matrix }}
+      matrix: ${{ steps.changed-directories.outputs.matrix }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
-
-      - name: Detect changed Helm charts
-        id: changed
+      - name: Get changed Helm chart directories
+        id: changed-directories
         run: |
           echo "Detecting changed Helm charts..."
           if [ "${{ github.event_name }}" == "pull_request_target" ]; then
-            CHANGED_FILES=$(git diff --name-only HEAD^1...HEAD)
+            list_changed_files=$(git diff --name-only HEAD^1...HEAD)
           else
-            CHANGED_FILES=$(git diff --name-only origin/main...HEAD)
+            list_changed_files=$(git diff --name-only origin/main...HEAD)
           fi
 
-          MATRIX=""
-          for file in $CHANGED_FILES; do
+          matrix=""
+          for file in $list_changed_files; do
             dir=$(dirname "$file")
             if [ -f "$dir/Chart.yaml" ]; then
-              module_name=$(echo "$dir" | tr '/' '_')
-              MATRIX+="{\"module_name\": \"$module_name\", \"module_path\": \"$dir\"},"
+              module_name=$(echo "$dir" | sed 's/\//_/g')
+              matrix+="{\"module_name\": \"$module_name\", \"module_path\": \"$dir\"},"
             fi
           done
 
-          if [ -z "$MATRIX" ]; then
+          if [ -z "$matrix" ]; then
             echo "matrix={\"include\":[]}" >> $GITHUB_OUTPUT
+            echo "No charts changed."
           else
-            MATRIX="{\"include\":[$(echo "$MATRIX" | sed 's/,$//')]}"
-            echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+            echo "matrix={\"include\":[$(echo "$matrix" | sed 's/,$//')]}" >> $GITHUB_OUTPUT
+            echo "Changed chart directories detected."
           fi
 
-  # 2️⃣ In PR — Build charts, commit index & tgz to PR branch, and comment version diff
-  verify-and-comment:
-    name: Verify & Comment on Helm Chart
+  comment-version-change:
+    name: Comment Helm Chart Version Change
     needs: generate-matrix
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: github.event_name == 'pull_request'
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     steps:
-      - name: Checkout PR branch
+      - name: Checkout PR branch (head)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ github.head_ref }}
 
+      - name: Compare versions and build comment
+        id: build_comment
+        run: |
+          echo "# Helm Chart Version Changes" > prepare_comment.txt
+          echo "| Chart | Previous Version | New Version |" >> prepare_comment.txt
+          echo "|-------|------------------|-------------|" >> prepare_comment.txt
+
+          changed=$(echo '${{ needs.generate-matrix.outputs.matrix }}' | jq -c '.include[]')
+          any_change=false
+
+          for item in $(echo "$changed"); do
+            module_path=$(echo "$item" | jq -r '.module_path')
+            module_name=$(echo "$item" | jq -r '.module_name')
+
+            if [ -f "$module_path/Chart.yaml" ]; then
+              new_ver=$(grep '^version:' "$module_path/Chart.yaml" | sed 's/version:[[:space:]]*//')
+              old_ver=$(git show origin/main:"$module_path/Chart.yaml" | grep '^version:' | sed 's/version:[[:space:]]*//')
+
+              if [ "$new_ver" != "$old_ver" ]; then
+                echo "| $module_name | $old_ver | $new_ver |" >> prepare_comment.txt
+                any_change=true
+              fi
+            fi
+          done
+
+          if [ "$any_change" = false ]; then
+            echo "No chart version changes found." > prepare_comment.txt
+          fi
+
+      - name: Comment on PR
+        uses: thollander/actions-comment-pull-request@24bffb9b452ba05a4f3f77933840a6a841d1b32b
+        with:
+          file-path: prepare_comment.txt
+          comment-tag: helm_version_change
+          mode: recreate
+
+  package-helm-charts:
+    needs: generate-matrix
+    runs-on: ubuntu-24.04
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true)
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    name: Package Helm Chart
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          ref: ${{ (github.event_name == 'pull_request' && github.head_ref) || 'main' }}
+
       - name: Set up Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@fe7b79cd5ee1e45176fcad797de68ecaf3ca4814
         with:
           version: ${{ env.HELM_VERSION }}
 
-      - name: Lint and package Helm chart
+      - name: Extract version from Chart.yaml
+        id: get_version
         run: |
-          mkdir -p packages
-          helm lint "${{ matrix.module_path }}"
-          helm package "${{ matrix.module_path }}" --destination packages
-          helm repo index packages --merge packages/index.yaml || helm repo index packages
+          version=$(grep '^version:' "${{ matrix.module_path }}/Chart.yaml" | head -1 | sed 's/version:[[:space:]]*//')
+          if [ -z "$version" ]; then
+            echo "ERROR: Version not found in Chart.yaml"
+            exit 1
+          fi
+          echo "version=$version" >> $GITHUB_OUTPUT
 
-          mv packages/*.tgz packages/index.yaml ${{ matrix.module_path }}/
+      - name: Package Helm chart and update index
+        run: |
+          mkdir -p ../packages
+          cd ${{ matrix.module_path }}
+          echo "Packaging chart: ${{ matrix.module_name }}"
+          helm package . --version "${{ steps.get_version.outputs.version }}"
+          cd ..
+          if [ -f "packages/index.yaml" ]; then
+            helm repo index ${{ matrix.module_path }} --merge packages/index.yaml
+          else
+            helm repo index ${{ matrix.module_path }}
+          fi
+          mv ${{ matrix.module_path }}/*.tgz ${{ matrix.module_path }}/index.yaml packages/
+          echo "Contents of packages directory:"
+          ls -l packages/
 
-          echo "Helm package and index updated for ${{ matrix.module_name }}"
-
-      - name: Commit packaged charts to PR branch
+      - name: Commit packaged chart
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ${{ matrix.module_path }}/index.yaml ${{ matrix.module_path }}/*.tgz
+          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
+          git add packages/
           if ! git diff --cached --quiet; then
-            git commit -m "Preview: update Helm package for ${{ matrix.module_name }}"
-            git push origin HEAD:${{ github.head_ref }}
+            if [ "${{ github.event_name }}" == "pull_request" ]; then
+              commit_msg="Preview: Package Helm chart for ${{ matrix.module_name }} version ${{ steps.get_version.outputs.version }}"
+              push_ref="${{ github.head_ref }}"
+            else
+              commit_msg="Release: Package Helm chart for ${{ matrix.module_name }} version ${{ steps.get_version.outputs.version }}"
+              push_ref="main"
+            fi
+            git commit -m "$commit_msg"
+            git push origin HEAD:$push_ref
+            echo "Packaged chart committed for ${{ matrix.module_name }}"
           else
-            echo "No Helm packaging changes to commit."
+            echo "No changes to commit."
           fi
 
-      - name: Comment version change
-        id: comment
-        run: |
-          old_ver=$(git show origin/main:"${{ matrix.module_path }}/Chart.yaml" 2>/dev/null | grep '^version:' | awk '{print $2}')
-          new_ver=$(grep '^version:' "${{ matrix.module_path }}/Chart.yaml" | awk '{print $2}')
-          echo "| Chart | Old | New |" > comment.txt
-          echo "|-------|------|-----|" >> comment.txt
-          echo "| ${{ matrix.module_name }} | ${old_ver:-N/A} | $new_ver |" >> comment.txt
-
-      - name: Post comment to PR
-        uses: thollander/actions-comment-pull-request@24bffb9b452ba05a4f3f77933840a6a841d1b32b
-        with:
-          file-path: comment.txt
-          comment-tag: helm_version_check
-          mode: recreate
-
-  # 3️⃣ After merge — Commit and tag release
-  release-and-tag:
-    name: Release Helm Charts
-    needs: generate-matrix
-    runs-on: ubuntu-latest
+  tag-helm-charts:
+    name: Create Git Tag for Helm Chart
+    needs: [generate-matrix, package-helm-charts]
+    runs-on: ubuntu-24.04
     if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     steps:
-      - name: Checkout main
-        uses: actions/checkout@v4
+      - name: Checkout main branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
+          fetch-tags: true
           ref: main
 
-      - name: Set up Helm
-        uses: azure/setup-helm@v4
-        with:
-          version: ${{ env.HELM_VERSION }}
-
-      - name: Package chart for release
+      - name: Extract version from Chart.yaml
+        id: get_version
         run: |
-          mkdir -p packages
-          helm package "${{ matrix.module_path }}" --destination packages
-          helm repo index packages --merge packages/index.yaml || helm repo index packages
-          mv packages/*.tgz packages/index.yaml ${{ matrix.module_path }}/
+          version=$(grep '^version:' "${{ matrix.module_path }}/Chart.yaml" | head -1 | sed 's/version:[[:space:]]*//')
+          echo "version=$version" >> $GITHUB_OUTPUT
 
-      - name: Commit packaged charts to main
+      - name: Get latest commit for module
+        id: get_commit_sha
+        run: |
+          sha=$(git log -1 --format="%H" -- "${{ matrix.module_path }}")
+          echo "sha=$sha" >> $GITHUB_OUTPUT
+
+      - name: Create and push Git tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ${{ matrix.module_path }}/index.yaml ${{ matrix.module_path }}/*.tgz
-          if ! git diff --cached --quiet; then
-            git commit -m "Release: update Helm package for ${{ matrix.module_name }}"
-            git push origin main
-          else
-            echo "No Helm package changes to commit."
-          fi
+          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
 
-      - name: Create and push tag
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          version=$(grep '^version:' "${{ matrix.module_path }}/Chart.yaml" | awk '{print $2}')
-          tag="${{ matrix.module_name }}-v${version}"
-          git tag -f "$tag" -m "Release $tag"
-          git push origin "$tag" --force
+          TAG="${{ matrix.module_name }}-v${{ steps.get_version.outputs.version }}"
+
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists. Skipping."
+          else
+            git tag -a "$TAG" -m "Release $TAG" "${{ steps.get_commit_sha.outputs.sha }}"
+            git push origin "$TAG"
+            echo "Tag pushed: $TAG"
+          fi
