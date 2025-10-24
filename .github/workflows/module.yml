@@ -101,23 +101,71 @@ jobs:
           comment-tag: helm_version_change
           mode: recreate
 
-  package-helm-charts:
+
+  preview-helm-charts:
     needs: generate-matrix
     runs-on: ubuntu-24.04
-    if: >-
-      github.event_name == 'pull_request' ||
-      (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true)
+    if: github.event_name == 'pull_request'
     strategy:
       fail-fast: false
       max-parallel: 1
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    name: Package Helm Chart
+    name: Preview Helm Chart Packaging
     steps:
-      - name: Checkout code
+      - name: Checkout PR branch
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
-          ref: ${{ (github.event_name == 'pull_request' && github.head_ref) || 'main' }}
+          ref: ${{ github.head_ref }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@fe7b79cd5ee1e45176fcad797de68ecaf3ca4814
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Preview Helm Chart packaging
+        run: |
+          mkdir -p ../packages
+          cd ${{ matrix.module_path }}
+          echo "Packaging preview chart: ${{ matrix.module_name }}"
+          helm package .
+          cd ..
+          if [ -f "packages/index.yaml" ]; then
+            helm repo index ${{ matrix.module_path }} --merge packages/index.yaml
+          else
+            helm repo index ${{ matrix.module_path }}
+          fi
+          mv ${{ matrix.module_path }}/*.tgz ${{ matrix.module_path }}/index.yaml packages/
+
+      - name: Commit preview chart
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add packages/
+          if ! git diff --cached --quiet; then
+            git commit -m "Preview Helm chart for ${{ matrix.module_name }}"
+            git push origin HEAD:${{ github.head_ref }}
+            echo "Preview package committed for ${{ matrix.module_name }}"
+          else
+            echo "No preview changes to commit."
+          fi
+
+  package-helm-charts:
+    needs: generate-matrix
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          ref: main
 
       - name: Set up Helm
         uses: azure/setup-helm@fe7b79cd5ee1e45176fcad797de68ecaf3ca4814
@@ -136,39 +184,34 @@ jobs:
 
       - name: Package Helm chart and update index
         run: |
-          mkdir -p ../packages
-          cd ${{ matrix.module_path }}
-          echo "Packaging chart: ${{ matrix.module_name }}"
+          mkdir -p packages
+          cd "${{ matrix.module_path }}"
+          echo "Packaging final chart: ${{ matrix.module_name }}"
           helm package . --version "${{ steps.get_version.outputs.version }}"
-          cd ..
-          if [ -f "packages/index.yaml" ]; then
-            helm repo index ${{ matrix.module_path }} --merge packages/index.yaml
+          if [ -f "../packages/index.yaml" ]; then
+            helm repo index . --merge ../packages/index.yaml
           else
-            helm repo index ${{ matrix.module_path }}
+            helm repo index .
           fi
-          mv ${{ matrix.module_path }}/*.tgz ${{ matrix.module_path }}/index.yaml packages/
+          mv ./*.tgz index.yaml ../packages/
+          echo "Contents of packages directory:"
+          ls -l ../packages/
 
-      - name: Commit packaged chart
+      - name: Commit and push packaged charts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
+
           git add packages/
           if ! git diff --cached --quiet; then
-            if [ "${{ github.event_name }}" == "pull_request" ]; then
-              commit_msg="Preview: Package Helm chart for ${{ matrix.module_name }} version ${{ steps.get_version.outputs.version }}"
-              push_ref="${{ github.head_ref }}"
-            else
-              commit_msg="Release: Package Helm chart for ${{ matrix.module_name }} version ${{ steps.get_version.outputs.version }}"
-              push_ref="main"
-            fi
-            git commit -m "$commit_msg"
-            git push origin HEAD:$push_ref
-            echo "Packaged chart committed for ${{ matrix.module_name }}"
+            git commit -m "Release ${{ matrix.module_name }} version ${{ steps.get_version.outputs.version }}"
+            git push origin main
+            echo "Committed and pushed changes for ${{ matrix.module_name }}"
           else
-            echo "No changes to commit."
+            echo "No changes detected in packages/, skipping commit."
           fi
 
   tag-helm-charts:
