@@ -136,19 +136,23 @@ jobs:
 
       - name: Package Helm chart and update index
         run: |
-          mkdir -p ../packages
-          cd ${{ matrix.module_path }}
           echo "Packaging chart: ${{ matrix.module_name }}"
           helm package . --version "${{ steps.get_version.outputs.version }}"
-          cd ..
+        working-directory: ${{ matrix.module_path }}
+
+      - name: Create packages directory
+        run: mkdir -p ../packages
+
+      - name: Update index.yaml and move packaged charts
+        run: |
           if [ -f "packages/index.yaml" ]; then
             helm repo index ${{ matrix.module_path }} --merge packages/index.yaml
           else
             helm repo index ${{ matrix.module_path }}
           fi
           mv ${{ matrix.module_path }}/*.tgz ${{ matrix.module_path }}/index.yaml packages/
-          echo "Contents of packages directory:"
-          ls -l packages/
+
+        working-directory: ${{ matrix.module_path }}
 
       - name: Commit packaged chart
         env:
