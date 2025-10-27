@@ -137,22 +137,20 @@ jobs:
       - name: Package Helm chart and update index
         env:
           MODULE_PATH: ${{ matrix.module_path }}
-          MODULE_NAME: ${{ matrix.module_name }}
           CHART_VERSION: ${{ steps.get_version.outputs.version }}
-          PACKAGES_DIR: ${{ github.workspace }}/packages
+          WORKSPACE: ${{ github.workspace }}
         run: |
           set -euo pipefail
-          mkdir -p "$PACKAGES_DIR"
-          echo "Packaging $MODULE_NAME (v$CHART_VERSION) into $PACKAGES_DIR"
-          helm package "$MODULE_PATH" --destination "$PACKAGES_DIR" --version "$CHART_VERSION"
-          if [ -f "$PACKAGES_DIR/index.yaml" ]; then
-            echo "Updating existing index.yaml"
-            helm repo index "$PACKAGES_DIR" --merge "$PACKAGES_DIR/index.yaml"
+          mkdir -p "$WORKSPACE/packages"
+          echo "Packaging chart: ${{ matrix.module_name }}"
+          helm package "$MODULE_PATH" --destination "$MODULE_PATH" --version "$CHART_VERSION"
+          if [ -f "$WORKSPACE/packages/index.yaml" ]; then
+            helm repo index "$MODULE_PATH" --merge "$WORKSPACE/packages/index.yaml"
           else
-            echo "Creating new index.yaml"
-            helm repo index "$PACKAGES_DIR"
+            helm repo index "$MODULE_PATH"
           fi
-          echo "Chart packaged & index updated in $PACKAGES_DIR"
+          mv "$MODULE_PATH"/*.tgz "$WORKSPACE/packages/" 2>/dev/null || true
+          mv "$MODULE_PATH"/index.yaml "$WORKSPACE/packages/" 2>/dev/null || true
 
       - name: Commit packaged chart
         env:
