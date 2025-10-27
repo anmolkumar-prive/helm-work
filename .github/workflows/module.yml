@@ -100,7 +100,7 @@ jobs:
           file-path: prepare_comment.txt
           comment-tag: helm_version_change
           mode: recreate
-          
+
   package-helm-charts:
     needs: generate-matrix
     runs-on: ubuntu-24.04
@@ -136,27 +136,17 @@ jobs:
 
       - name: Package Helm chart and update index
         run: |
+          mkdir -p ../packages
           cd ${{ matrix.module_path }}
-          
-          # Package the Helm chart
-          echo "Packaging chart: ${{ matrix.module_name }} version ${{ steps.get_version.outputs.version }}"
+          echo "Packaging chart: ${{ matrix.module_name }}"
           helm package . --version "${{ steps.get_version.outputs.version }}"
-
-          # Check if the existing index.yaml exists before merging
-          if [ -f "../packages/index.yaml" ]; then
-            helm repo index --merge ../packages/index.yaml .
+          cd ..
+          if [ -f "packages/index.yaml" ]; then
+            helm repo index ${{ matrix.module_path }} --merge packages/index.yaml
           else
-            helm repo index .
+            helm repo index ${{ matrix.module_path }}
           fi
-
-          # Move the .tgz and updated index.yaml to the ../packages/ directory
-          if [ -f "*.tgz" ] && [ -f "index.yaml" ]; then
-            mv *.tgz index.yaml ../packages/
-            echo "Packaged chart and updated index.yaml moved to packages/"
-          else
-            echo "Error: .tgz or index.yaml not found, aborting."
-            exit 1
-          fi
+          mv ${{ matrix.module_path }}/*.tgz ${{ matrix.module_path }}/index.yaml packages/
 
       - name: Commit packaged chart
         env:
@@ -179,7 +169,7 @@ jobs:
             echo "Packaged chart committed for ${{ matrix.module_name }}"
           else
             echo "No changes to commit."
-
+          fi
 
   tag-helm-charts:
     name: Create Git Tag for Helm Chart
