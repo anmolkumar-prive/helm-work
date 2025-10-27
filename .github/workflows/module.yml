@@ -64,7 +64,6 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.head_ref }}
-
       - name: Compare versions and build comment
         id: build_comment
         run: |
@@ -74,10 +73,19 @@ jobs:
 
           changed=$(echo '${{ needs.generate-matrix.outputs.matrix }}' | jq -c '.include[]')
           any_change=false
+          processed_charts=()
 
           for item in $(echo "$changed"); do
             module_path=$(echo "$item" | jq -r '.module_path')
             module_name=$(echo "$item" | jq -r '.module_name')
+
+            # Skip this chart if we've already processed it
+            if [[ " ${processed_charts[@]} " =~ " ${module_name} " ]]; then
+              continue
+            fi
+
+            # Add the chart to the processed list
+            processed_charts+=("$module_name")
 
             if [ -f "$module_path/Chart.yaml" ]; then
               new_ver=$(grep '^version:' "$module_path/Chart.yaml" | sed 's/version:[[:space:]]*//')
@@ -93,6 +101,7 @@ jobs:
           if [ "$any_change" = false ]; then
             echo "No chart version changes found." > prepare_comment.txt
           fi
+
 
       - name: Comment on PR
         uses: thollander/actions-comment-pull-request@24bffb9b452ba05a4f3f77933840a6a841d1b32b
