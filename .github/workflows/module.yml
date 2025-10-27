@@ -100,7 +100,7 @@ jobs:
           file-path: prepare_comment.txt
           comment-tag: helm_version_change
           mode: recreate
-          
+
   package-helm-charts:
     needs: generate-matrix
     runs-on: ubuntu-24.04
@@ -137,20 +137,22 @@ jobs:
       - name: Package Helm chart and update index
         run: |
           mkdir -p ../packages
-          # Directly package the chart without cd ..
           echo "Packaging chart: ${{ matrix.module_name }}"
+          
+          # Package the chart
           helm package ${{ matrix.module_path }} --version "${{ steps.get_version.outputs.version }}"
-          
-          # Update the index file
+
+          # Update the index.yaml
           if [ -f "../packages/index.yaml" ]; then
-            helm repo index ${{ matrix.module_path }} --merge ../packages/index.yaml
+            helm repo index . --merge ../packages/index.yaml
           else
-            helm repo index ${{ matrix.module_path }}
+            helm repo index .
           fi
-          
-          mv ${{ matrix.module_path }}/*.tgz ../packages/
-          
-          # Display the contents of the packages directory
+
+          # Move the packaged .tgz files to the packages directory
+          mv *.tgz ../packages/
+
+          # Display contents of the packages directory
           echo "Contents of packages directory:"
           ls -l ../packages/
 
@@ -161,7 +163,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
-          git add ../packages/
+          git add packages/
           if ! git diff --cached --quiet; then
             if [ "${{ github.event_name }}" == "pull_request" ]; then
               commit_msg="Preview: Package Helm chart for ${{ matrix.module_name }} version ${{ steps.get_version.outputs.version }}"
@@ -176,7 +178,6 @@ jobs:
           else
             echo "No changes to commit."
           fi
-
 
   tag-helm-charts:
     name: Create Git Tag for Helm Chart
