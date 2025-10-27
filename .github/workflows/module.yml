@@ -147,8 +147,6 @@ jobs:
             helm repo index ${{ matrix.module_path }}
           fi
           mv ${{ matrix.module_path }}/*.tgz ${{ matrix.module_path }}/index.yaml packages/
-          echo "Contents of packages directory:"
-          ls -l packages/
 
       - name: Commit packaged chart
         env:
