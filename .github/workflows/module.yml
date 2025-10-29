@@ -152,36 +152,15 @@ jobs:
           mkdir -p "$WORKSPACE/packages"
           echo "Packaging chart: ${{ matrix.module_name }}"
           helm package "$MODULE_PATH" --destination "$MODULE_PATH" --version "$CHART_VERSION"
-          
-          # Ensure index.yaml gets updated on the first run (before merge)
           if [ -f "$WORKSPACE/packages/index.yaml" ]; then
-            echo "Merging into existing index.yaml"
             helm repo index "$MODULE_PATH" --merge "$WORKSPACE/packages/index.yaml"
           else
-            echo "Creating new index.yaml"
             helm repo index "$MODULE_PATH"
           fi
-
           mv "$MODULE_PATH"/*.tgz "$WORKSPACE/packages/" 2>/dev/null || true
           mv "$MODULE_PATH"/index.yaml "$WORKSPACE/packages/" 2>/dev/null || true
 
-      - name: Check if chart files changed
-        id: check_changes
-        run: |
-          # Get the list of changed files between the main branch and the PR branch
-          changed_files=$(git diff --name-only origin/main...HEAD)
-          
-          # Check if any Chart.yaml file has changed
-          if echo "$changed_files" | grep -qE 'charts/.*/Chart.yaml'; then
-            echo "Chart files changed, proceeding with commit"
-            echo "chart_change=true" >> $GITHUB_ENV
-          else
-            echo "No chart files changed, skipping commit"
-            echo "chart_change=false" >> $GITHUB_ENV
-          fi
-
       - name: Commit packaged chart
-        if: env.chart_change == 'true'  # Only run if chart files were changed
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -203,7 +182,6 @@ jobs:
           else
             echo "No changes to commit."
           fi
-
 
   tag-helm-charts:
     name: Create Git Tag for Helm Chart
