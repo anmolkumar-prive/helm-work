@@ -178,6 +178,7 @@ jobs:
           else
             echo "No chart files changed, skipping commit"
             echo "chart_change=false" >> $GITHUB_ENV
+          fi
 
       - name: Commit packaged chart
         if: env.chart_change == 'true'  # Only run if chart files were changed
