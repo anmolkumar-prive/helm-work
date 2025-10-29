@@ -142,7 +142,23 @@ jobs:
           fi
           echo "version=$version" >> $GITHUB_OUTPUT
 
+      - name: Check if chart files changed
+        id: check_changes
+        run: |
+          # Get the list of changed files between the main branch and the PR branch
+          changed_files=$(git diff --name-only origin/main...HEAD)
+          
+          # Check if any Chart.yaml file has changed
+          if echo "$changed_files" | grep -qE 'charts/.*/Chart.yaml'; then
+            echo "Chart files changed, proceeding with index update"
+            echo "index_update=true" >> $GITHUB_ENV
+          else
+            echo "No chart files changed, skipping index update"
+            echo "index_update=false" >> $GITHUB_ENV
+          fi
+
       - name: Package Helm chart and update index
+        if: env.index_update == 'true' # Only run this step if chart files were changed
         env:
           MODULE_PATH: ${{ matrix.module_path }}
           CHART_VERSION: ${{ steps.get_version.outputs.version }}
@@ -152,11 +168,14 @@ jobs:
           mkdir -p "$WORKSPACE/packages"
           echo "Packaging chart: ${{ matrix.module_name }}"
           helm package "$MODULE_PATH" --destination "$MODULE_PATH" --version "$CHART_VERSION"
+          
+          # Only update the index.yaml if chart files have been modified
           if [ -f "$WORKSPACE/packages/index.yaml" ]; then
             helm repo index "$MODULE_PATH" --merge "$WORKSPACE/packages/index.yaml"
           else
             helm repo index "$MODULE_PATH"
           fi
+
           mv "$MODULE_PATH"/*.tgz "$WORKSPACE/packages/" 2>/dev/null || true
           mv "$MODULE_PATH"/index.yaml "$WORKSPACE/packages/" 2>/dev/null || true
 
