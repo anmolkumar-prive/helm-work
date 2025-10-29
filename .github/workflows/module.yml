@@ -122,7 +122,7 @@ jobs:
     name: Package Helm Chart
     steps:
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ (github.event_name == 'pull_request' && github.head_ref) || 'main' }}
@@ -132,55 +132,58 @@ jobs:
         with:
           version: ${{ env.HELM_VERSION }}
 
-      - name: Extract version from Chart.yaml
+      - name: Extract version
         id: get_version
         run: |
           version=$(grep '^version:' "${{ matrix.module_path }}/Chart.yaml" | head -1 | sed 's/version:[[:space:]]*//')
-          if [ -z "$version" ]; then
-            echo "ERROR: Version not found in Chart.yaml"
-            exit 1
-          fi
           echo "version=$version" >> $GITHUB_OUTPUT
 
-      - name: Package Helm chart and update index
+      - name: Package chart
         env:
           MODULE_PATH: ${{ matrix.module_path }}
-          CHART_VERSION: ${{ steps.get_version.outputs.version }}
           WORKSPACE: ${{ github.workspace }}
         run: |
-          set -euo pipefail
           mkdir -p "$WORKSPACE/packages"
-          echo "Packaging chart: ${{ matrix.module_name }}"
-          helm package "$MODULE_PATH" --destination "$MODULE_PATH" --version "$CHART_VERSION"
+          helm package "$MODULE_PATH" --destination "$WORKSPACE/packages"
+
+      - name: Generate index.yaml (only in PR)
+        if: github.event_name == 'pull_request'
+        env:
+          WORKSPACE: ${{ github.workspace }}
+        run: |
           if [ -f "$WORKSPACE/packages/index.yaml" ]; then
-            helm repo index "$MODULE_PATH" --merge "$WORKSPACE/packages/index.yaml"
+            helm repo index "$WORKSPACE/packages" --merge "$WORKSPACE/packages/index.yaml"
           else
-            helm repo index "$MODULE_PATH"
+            helm repo index "$WORKSPACE/packages"
           fi
-          mv "$MODULE_PATH"/*.tgz "$WORKSPACE/packages/" 2>/dev/null || true
-          mv "$MODULE_PATH"/index.yaml "$WORKSPACE/packages/" 2>/dev/null || true
 
       - name: Commit packaged chart
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IS_PR: ${{ github.event_name == 'pull_request' }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
-          git add packages/
+
+          # Always stage .tgz
+          git add "$WORKSPACE/packages/*.tgz"
+
+          # Only stage index.yaml if it exists AND we're in PR
+          if [ "$IS_PR" = "true" ] && [ -f "$WORKSPACE/packages/index.yaml" ]; then
+            git add "$WORKSPACE/packages/index.yaml"
+          fi
+
           if ! git diff --cached --quiet; then
-            if [ "${{ github.event_name }}" == "pull_request" ]; then
-              commit_msg="Preview: Package Helm chart for ${{ matrix.module_name }} version ${{ steps.get_version.outputs.version }}"
-              push_ref="${{ github.head_ref }}"
+            if [ "$IS_PR" = "true" ]; then
+              msg="Preview: Helm chart ${{ matrix.module_name }} v${{ steps.get_version.outputs.version }}"
+              ref="${{ github.head_ref }}"
             else
-              commit_msg="Release: Package Helm chart for ${{ matrix.module_name }} version ${{ steps.get_version.outputs.version }}"
-              push_ref="main"
+              msg="Release: Helm chart ${{ matrix.module_name }} v${{ steps.get_version.outputs.version }}"
+              ref="main"
             fi
-            git commit -m "$commit_msg"
-            git push origin HEAD:$push_ref
-            echo "Packaged chart committed for ${{ matrix.module_name }}"
-          else
-            echo "No changes to commit."
+            git commit -m "$msg"
+            git push origin HEAD:$ref --force-with-lease
           fi
 
   tag-helm-charts:
